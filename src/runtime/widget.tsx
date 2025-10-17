@@ -5,6 +5,8 @@ import ReactDOM from 'react-dom'
 import { type IMConfig } from './config'
 import { DEFAULT_METEOGRAM_SVG } from './defaultSvg'
 
+const DEFAULT_USER_AGENT = 'YrWeatherExperienceWidget/1.0 (https://your-domain.example contact@example.com)'
+
 interface State {
   svgHtml: string
   isLoading: boolean
@@ -15,6 +17,10 @@ interface State {
 
 export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>, State> {
   private refreshIntervalId: NodeJS.Timer = null
+  private lastModifiedHeader: string | null = null
+  private lastEtagHeader: string | null = null
+  private lastRequestUrl: string | null = null
+  private userAgentHeaderWarningLogged = false
 
   private normalizeUrl = (url?: string | null): string | null => {
     if (!url) return null
@@ -58,9 +64,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const fetchRelevantChanged =
       cfg.sourceUrl !== prev.sourceUrl ||
       cfg.autoRefreshEnabled !== prev.autoRefreshEnabled ||
-      cfg.refreshInterval !== prev.refreshInterval
+      cfg.refreshInterval !== prev.refreshInterval ||
+      cfg.userAgent !== prev.userAgent
 
     if (fetchRelevantChanged) {
+      if (cfg.userAgent !== prev.userAgent) {
+        this.userAgentHeaderWarningLogged = false
+      }
       this.handleDataSourceChange()
       this.setupAutoRefresh()
     } else if (cfg !== prev) {
@@ -75,12 +85,24 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   handleDataSourceChange = () => {
     const { config } = this.props
+    if (typeof config.userAgent === 'undefined') {
+      this.props.onSettingChange({
+        id: this.props.id,
+        config: this.props.config.set('userAgent', DEFAULT_USER_AGENT)
+      })
+      return
+    }
     const normalizedUrl = this.normalizeUrl(config.sourceUrl)
     if (normalizedUrl && normalizedUrl !== config.sourceUrl) {
       this.props.onSettingChange({
         id: this.props.id,
         config: this.props.config.set('sourceUrl', normalizedUrl)
       })
+    }
+    if (normalizedUrl !== this.lastRequestUrl) {
+      this.lastModifiedHeader = null
+      this.lastEtagHeader = null
+      this.lastRequestUrl = normalizedUrl
     }
     const fallbackSvg = this.getFallbackSvg()
     if (normalizedUrl) {
@@ -103,6 +125,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   setupAutoRefresh = (): void => {
     if (this.refreshIntervalId) clearInterval(this.refreshIntervalId)
     const normalizedUrl = this.normalizeUrl(this.props.config.sourceUrl)
+    if (!this.props.config.userAgent?.trim()) {
+      return
+    }
     if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && normalizedUrl) {
       const ms = this.props.config.refreshInterval * 60 * 1000
       this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(normalizedUrl), ms)
@@ -122,6 +147,19 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       })
       return
     }
+    const configuredUserAgent = this.props.config.userAgent?.trim()
+    if (!configuredUserAgent) {
+      this.setState({
+        isLoading: false,
+        error: 'Please configure a valid MET API User Agent before fetching data.'
+      })
+      return
+    }
+    if (normalizedUrl !== this.lastRequestUrl) {
+      this.lastModifiedHeader = null
+      this.lastEtagHeader = null
+      this.lastRequestUrl = normalizedUrl
+    }
     if (attempt === 1) {
       this.setState({ isLoading: true, error: null })
     }
@@ -130,13 +168,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   }
 
   fetchSvgDirect = (url: string, attempt = 1): void => {
+    const hasConditionalHeaders = Boolean(this.lastModifiedHeader || this.lastEtagHeader)
     let requestUrl = url
-    try {
-      const urlObj = new URL(url)
-      urlObj.searchParams.set('nocache', Date.now().toString())
-      requestUrl = urlObj.toString()
-    } catch (err) {
-      requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
+    if (!hasConditionalHeaders) {
+      try {
+        const urlObj = new URL(url)
+        urlObj.searchParams.set('nocache', Date.now().toString())
+        requestUrl = urlObj.toString()
+      } catch (err) {
+        requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
+      }
     }
 
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -145,17 +186,50 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       timeoutId = setTimeout(() => controller.abort(), 15000)
     }
 
+    const headers = new Headers({ Accept: 'image/svg+xml,text/html;q=0.9,*/*;q=0.8' })
+    const userAgent = this.props.config.userAgent?.trim()
+    if (userAgent) {
+      try {
+        headers.set('User-Agent', userAgent)
+      } catch (err) {
+        if (!this.userAgentHeaderWarningLogged) {
+          console.warn('Unable to set User-Agent header for MET request. Ensure widget runs in an environment that allows custom headers.', err)
+          this.userAgentHeaderWarningLogged = true
+        }
+      }
+    }
+    if (this.lastModifiedHeader) headers.set('If-Modified-Since', this.lastModifiedHeader)
+    if (this.lastEtagHeader) headers.set('If-None-Match', this.lastEtagHeader)
+
     const fetchOptions: RequestInit = {
-      cache: 'no-store',
+      cache: hasConditionalHeaders ? 'no-cache' : 'no-store',
       mode: 'cors',
       credentials: 'omit',
-      headers: { Accept: 'image/svg+xml,text/html;q=0.9,*/*;q=0.8' }
+      headers
     }
     if (controller) fetchOptions.signal = controller.signal
 
     fetch(requestUrl, fetchOptions)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
+      .then(r => {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+        if (r.status === 304) {
+          this.setState({ isLoading: false, error: null })
+          return null
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const lastModified = r.headers.get('last-modified')
+        const etag = r.headers.get('etag')
+        if (lastModified) this.lastModifiedHeader = lastModified
+        if (etag) this.lastEtagHeader = etag
+        return r.text()
+      })
       .then(text => {
+        if (!text) {
+          return
+        }
         const t = text.trim()
         let svgString: string
 
@@ -182,6 +256,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         if (timeoutId) {
           clearTimeout(timeoutId)
           timeoutId = null
+        }
+        if ((err as any)?.name === 'AbortError') {
+          return
         }
         if (attempt < 5) {
           setTimeout(() => this.fetchSvgDirect(url, attempt + 1), 1000 * attempt)
