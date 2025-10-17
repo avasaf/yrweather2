@@ -26,7 +26,6 @@ interface ForecastPoint {
   windGust: number | null
   windDirection: number | null
   precipitation: number
-  precipitationMax: number
   symbolCode: string | null
 }
 
@@ -588,9 +587,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       throw new Error('Locationforecast response does not contain any timeseries data.')
     }
 
-    const series = timeseries.slice(0, 60)
+    const series = timeseries.slice(0, 120)
 
-    const points: ForecastPoint[] = series
+    let points: ForecastPoint[] = series
       .map((entry) => {
         const isoTime = entry?.time
         const date = isoTime ? new Date(isoTime) : null
@@ -606,7 +605,6 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         ]
 
         let precipitationValue = 0
-        let precipitationMaxValue = 0
         for (const source of precipitationSources) {
           if (!source?.details) continue
           const amount = Number(source.details?.precipitation_amount)
@@ -614,17 +612,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
           const normalized = amount / Math.max(1, source.hours)
           precipitationValue = Math.max(normalized, 0)
 
-          const maxAmount = Number(source.details?.precipitation_amount_max)
-          if (Number.isFinite(maxAmount)) {
-            precipitationMaxValue = Math.max(maxAmount / Math.max(1, source.hours), precipitationValue)
-          }
           break
-        }
-
-        if (!Number.isFinite(precipitationMaxValue) || precipitationMaxValue <= 0) {
-          precipitationMaxValue = precipitationValue
-        } else if (precipitationValue > precipitationMaxValue) {
-          precipitationMaxValue = precipitationValue
         }
 
         const temperatureRaw = Number(details?.air_temperature)
@@ -639,11 +627,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
           windGust: Number.isFinite(windGustRaw) ? windGustRaw : null,
           windDirection: Number.isFinite(windDirectionRaw) ? ((windDirectionRaw % 360) + 360) % 360 : null,
           precipitation: Number.isFinite(precipitationValue) ? Math.max(precipitationValue, 0) : 0,
-          precipitationMax: Number.isFinite(precipitationMaxValue) ? Math.max(precipitationMaxValue, 0) : Math.max(precipitationValue, 0),
           symbolCode: next1Hour?.summary?.symbol_code ?? next6Hour?.summary?.symbol_code ?? next12Hour?.summary?.symbol_code ?? null
         }
       })
       .filter((p): p is ForecastPoint => p.date instanceof Date && !Number.isNaN(p.date.getTime()))
+
+    if (points.length > 0) {
+      const startTime = points[0].date.getTime()
+      const maxDurationMs = 72 * 60 * 60 * 1000
+      points = points.filter((p) => (p.date.getTime() - startTime) <= maxDurationMs)
+    }
 
     if (points.length < 2) {
       throw new Error('Unable to parse any valid forecast points from Locationforecast response.')
@@ -655,7 +648,6 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const windSpeeds = points.map(p => p.windSpeed).filter((v): v is number => typeof v === 'number')
     const windGusts = points.map(p => p.windGust).filter((v): v is number => typeof v === 'number')
     const precipitationValues = points.map(p => Math.max(p.precipitation ?? 0, 0))
-    const precipitationMaxValues = points.map(p => Math.max(p.precipitationMax ?? 0, 0))
 
     const minTemp = temperatures.length ? Math.min(...temperatures) : -5
     const maxTemp = temperatures.length ? Math.max(...temperatures) : 5
@@ -674,10 +666,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     let windScaleMax = Math.max(4, Math.ceil((maxWindObserved + 1)))
     if (windScaleMax === 0) windScaleMax = 4
 
-    const maxPrecipObserved = Math.max(
-      precipitationValues.length ? Math.max(...precipitationValues) : 0,
-      precipitationMaxValues.length ? Math.max(...precipitationMaxValues) : 0
-    )
+    const maxPrecipObserved = precipitationValues.length ? Math.max(...precipitationValues) : 0
     const computePrecipStep = (value: number): number => {
       if (value <= 0.4) return 0.2
       if (value <= 1.5) return 0.5
@@ -693,27 +682,27 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       precipScaleMax = 1
     }
 
-    const width = 782
-    const marginLeft = 72
-    const marginRight = 92
+    const width = 1048
+    const marginLeft = 92
+    const marginRight = 132
     const chartWidth = width - marginLeft - marginRight
 
-    const dayLabelY = 48
+    const dayLabelY = 44
     const hourLabelY = dayLabelY + 22
-    const weatherTop = hourLabelY + 52
-    const weatherHeight = 210
+    const weatherTop = hourLabelY + 40
+    const weatherHeight = 236
     const weatherBottom = weatherTop + weatherHeight
-    const precipAreaHeight = Math.min(80, weatherHeight * 0.38)
+    const precipAreaHeight = Math.min(92, weatherHeight * 0.42)
     const precipAreaTop = weatherBottom - precipAreaHeight
-    const windGap = 30
+    const windGap = 48
     const windAreaTop = weatherBottom + windGap
-    const windAreaHeight = 120
+    const windAreaHeight = 148
     const windAreaBottom = windAreaTop + windAreaHeight
-    const iconRowY = weatherTop - 36
-    const arrowRowY = windAreaBottom + 26
-    const legendY = arrowRowY + 26
-    const titleY = legendY + 46
-    const height = titleY + 36
+    const iconRowY = weatherTop - 30
+    const arrowRowY = windAreaBottom + 32
+    const legendY = arrowRowY + 30
+    const titleY = legendY + 44
+    const height = titleY + 40
 
     const step = chartWidth / (points.length - 1)
     const getX = (idx: number) => marginLeft + step * idx
@@ -773,12 +762,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const windHorizontalLines: string[] = []
     const windAxisLabels: string[] = []
     const windLabelSteps = 3
+    const windLabelBaseOffset = 18
     for (let i = 0; i <= windLabelSteps; i++) {
       const value = (windScaleMax / windLabelSteps) * i
       const y = windY(value)
       windHorizontalLines.push(`<line x1="${marginLeft.toFixed(2)}" y1="${y.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="${(typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1).toFixed(2)}" stroke-opacity="${(Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1) * 0.9}" />`)
-      const clampedY = Math.min(windAreaBottom - 4, y + 10)
-      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(marginLeft - 16).toFixed(2)}" y="${clampedY.toFixed(2)}" text-anchor="end" dominant-baseline="alphabetic">${value.toFixed(value < 10 ? 1 : 0)}</text>`)
+      const labelY = windAreaBottom - (value / Math.max(windScaleMax, 1)) * (windAreaHeight - windLabelBaseOffset)
+      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(marginLeft - 16).toFixed(2)}" y="${labelY.toFixed(2)}" text-anchor="end" dominant-baseline="middle">${value.toFixed(value < 10 ? 1 : 0)}</text>`)
     }
 
     const verticalLines: string[] = []
@@ -825,42 +815,32 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const windGustColor = config?.windGustLineColor ?? '#e6d300'
     const windGustPath = windGustPathPoints.length > 1 ? `<path d="${windGustPathPoints.join(' ')}" fill="none" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linejoin="round" stroke-linecap="round" />` : ''
 
-    const precipitationMaxRects: string[] = []
     const precipitationRects: string[] = []
-    const precipitationLabels: string[] = []
     const precipColor = config?.precipitationBarColor ?? '#006edb'
-    const precipMaxColor = config?.maxPrecipitationColor ?? '#00b8f1'
     points.forEach((point, idx) => {
       const xCenter = getX(idx)
       const barWidth = Math.min(step * 0.6, 18)
       const baseValue = Math.max(Math.min(point.precipitation ?? 0, precipScaleMax), 0)
-      const maxValue = Math.max(Math.min(point.precipitationMax ?? baseValue, precipScaleMax), 0)
-      if (maxValue > 0) {
-        const maxHeight = (maxValue / precipScaleMax) * precipAreaHeight
-        const maxY = precipAreaTop + (precipAreaHeight - maxHeight)
-        precipitationMaxRects.push(`<rect x="${(xCenter - barWidth / 2).toFixed(2)}" y="${maxY.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${maxHeight.toFixed(2)}" fill="url(#max-precipitation-pattern)" stroke="${precipMaxColor}" stroke-width="0.6" />`)
-      }
       if (baseValue > 0) {
         const baseHeight = (baseValue / precipScaleMax) * precipAreaHeight
         const baseY = precipAreaTop + (precipAreaHeight - baseHeight)
         precipitationRects.push(`<rect x="${(xCenter - barWidth / 2).toFixed(2)}" y="${baseY.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${baseHeight.toFixed(2)}" fill="${precipColor}" />`)
       }
-      if (point.precipitation > precipScaleMax) {
-        precipitationLabels.push(`<text class="precipitation-values-over-max" x="${xCenter.toFixed(2)}" y="${(precipAreaTop - 10).toFixed(2)}" text-anchor="middle">${point.precipitation.toFixed(1)} mm</text>`)
-      }
     })
 
     const precipAxisLabels: string[] = []
     const precipTicks = 4
+    const precipAxisHeight = weatherHeight - 24
+    const precipAxisTop = weatherTop + 12
     for (let i = 0; i <= precipTicks; i++) {
       const value = (precipScaleMax / precipTicks) * i
-      const y = precipAreaTop + (precipAreaHeight - (value / precipScaleMax) * precipAreaHeight)
-      precipAxisLabels.push(`<text class="y-axis-label precipitation-label" x="${(width - marginRight + 18).toFixed(2)}" y="${(Math.max(weatherTop + 6, y - 6)).toFixed(2)}" dominant-baseline="hanging" text-anchor="start">${value.toFixed(value < 1 ? 1 : 0)}</text>`)
+      const y = precipAxisTop + precipAxisHeight - (value / Math.max(precipScaleMax, 1)) * precipAxisHeight
+      precipAxisLabels.push(`<text class="y-axis-label precipitation-label" x="${(width - marginRight + 20).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" text-anchor="start">${value.toFixed(value < 1 ? 1 : 0)}</text>`)
     }
 
     const iconInterval = Math.max(1, Math.round(points.length / 18))
     const iconElements: string[] = []
-    const iconSize = 28
+    const iconSize = 24
     points.forEach((point, idx) => {
       if (idx % iconInterval !== 0 && idx !== points.length - 1) return
       const category = this.getWeatherSymbolCategory(point.symbolCode)
@@ -870,9 +850,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       iconElements.push(`<g class="weather-icon" transform="translate(${x.toFixed(2)}, ${y.toFixed(2)})">${iconSvg}</g>`)
     })
 
-    const precipAxisLine = `<line x1="${(width - marginRight).toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${weatherBottom.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="1" />`
-    const weatherBaseline = `<line x1="${marginLeft.toFixed(2)}" y1="${weatherBottom.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${weatherBottom.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="1" />`
-    const windBaseline = `<line x1="${marginLeft.toFixed(2)}" y1="${windAreaBottom.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="1" />`
+    const baseGridOpacity = Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1
+    const windBaseline = `<line x1="${marginLeft.toFixed(2)}" y1="${windAreaBottom.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="1" stroke-opacity="${(baseGridOpacity * 0.85).toFixed(2)}" />`
 
     const windDirectionArrows: string[] = []
     const arrowInterval = Math.max(1, Math.round(points.length / 20))
@@ -880,29 +859,27 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       if (idx % arrowInterval !== 0 && idx !== points.length - 1) return
       if (typeof point.windDirection !== 'number') return
       const x = getX(idx)
-      const rotation = point.windDirection
+      const rotation = (point.windDirection + 180) % 360
       windDirectionArrows.push(`<g class="wind-arrow" transform="translate(${x.toFixed(2)}, ${arrowRowY.toFixed(2)}) rotate(${rotation.toFixed(2)})"><path d="M0,-12 L5,6 L0,2 L-5,6 Z" fill="${config?.secondaryTextColor ?? '#56616c'}" /></g>`)
     })
 
+    const legendSpacing = 174
+    const legendTranslate = (multiplier: number) => (legendSpacing * multiplier).toFixed(2)
     const legendGroup = `
       <g class="legend" transform="translate(${marginLeft.toFixed(2)}, ${legendY.toFixed(2)})">
         <g>
           <line x1="0" y1="0" x2="26" y2="0" stroke="${temperatureColor}" stroke-width="2.4" stroke-linecap="round" />
           <text class="legend-label" x="34" y="4">Temperature</text>
         </g>
-        <g transform="translate(0, 20)">
+        <g transform="translate(${legendTranslate(1)}, 0)">
           <rect x="0" y="-10" width="26" height="10" fill="${precipColor}" />
           <text class="legend-label" x="34" y="-2">Precipitation</text>
         </g>
-        <g transform="translate(0, 38)">
-          <rect x="0" y="-10" width="26" height="10" fill="url(#max-precipitation-pattern)" stroke="${precipMaxColor}" stroke-width="0.6" />
-          <text class="legend-label" x="34" y="-2">Max precipitation</text>
-        </g>
-        <g transform="translate(180, 0)">
+        <g transform="translate(${legendTranslate(2)}, 0)">
           <line x1="0" y1="0" x2="26" y2="0" stroke="${windColor}" stroke-width="2" stroke-linecap="round" />
           <text class="legend-label" x="34" y="4">Wind speed</text>
         </g>
-        <g transform="translate(180, 20)">
+        <g transform="translate(${legendTranslate(3)}, 0)">
           <line x1="0" y1="0" x2="26" y2="0" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" />
           <text class="legend-label" x="34" y="4">Wind gust</text>
         </g>
@@ -916,7 +893,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const lonLabel = this.formatCoordinateForLabel(lon)
     const locationTitle = latLabel && lonLabel ? `Weather forecast for ${latLabel}, ${lonLabel}` : 'Weather forecast'
 
-    const precipAxisTitle = `<text class="axis-title" x="${(width - marginRight + 18).toFixed(2)}" y="${(weatherTop - 16).toFixed(2)}" text-anchor="start" dominant-baseline="middle">mm</text>`
+    const precipAxisTitle = `<text class="axis-title" x="${(width - marginRight + 20).toFixed(2)}" y="${(weatherTop + 4).toFixed(2)}" text-anchor="start" dominant-baseline="hanging">mm</text>`
     const windAxisTitle = `<text class="axis-title" x="${(marginLeft - 16).toFixed(2)}" y="${(windAreaBottom + 20).toFixed(2)}" text-anchor="end" dominant-baseline="middle">m/s</text>`
     const titleElement = `<text class="title-label" x="${(width / 2).toFixed(2)}" y="${titleY.toFixed(2)}" text-anchor="middle">${this.escapeXml(locationTitle)}</text>`
 
@@ -946,40 +923,20 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     line-height: 1.4666666667rem;
     fill: ${config?.mainTextColor ?? '#21292b'};
   }
-  .precipitation-values-over-max {
-    font-size: 0.8rem;
-    font-weight: 600;
-    line-height: 1rem;
-    fill: #ffffff;
-  }
 </style>
 `
-
-    const defs = `
-      <defs>
-        <pattern id="max-precipitation-pattern" patternUnits="userSpaceOnUse" width="4" height="4">
-          <rect x="0" y="0" width="4" height="4" fill="${precipMaxColor}" opacity="0.3" />
-          <line x1="0" y1="0" x2="4" y2="4" stroke="${precipMaxColor}" stroke-width="0.5" opacity="0.6" />
-          <line x1="4" y1="0" x2="0" y2="4" stroke="${precipMaxColor}" stroke-width="0.5" opacity="0.6" />
-        </pattern>
-      </defs>
-    `
 
     return `<?xml version="1.0" encoding="UTF-8"?>
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Yr Weather Forecast">
   ${styleBlock}
   <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
-  ${defs}
   <g>
     ${dayBoundaryLines.join('')}
     ${horizontalLines.join('')}
     ${windHorizontalLines.join('')}
     ${verticalLines.join('')}
-    ${precipAxisLine}
-    ${weatherBaseline}
     ${windBaseline}
     ${temperaturePath}
-    ${precipitationMaxRects.join('')}
     ${precipitationRects.join('')}
     ${windPath}
     ${windGustPath}
@@ -991,7 +948,6 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     ${hourLabels.join('')}
     ${dayLabels.join('')}
     ${iconElements.join('')}
-    ${precipitationLabels.join('')}
     ${windDirectionArrows.join('')}
     ${legendGroup}
     ${titleElement}
@@ -1368,19 +1324,6 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       fill: ${config.secondaryTextColor} !important;
     }
 
-    .${scope} .svg-image-container svg .precipitation-values-over-max {
-      fill: #ffffff !important;
-    }
-
-    .${scope} .svg-image-container svg #max-precipitation-pattern rect {
-      fill: ${config.maxPrecipitationColor} !important;
-      opacity: 0.3 !important;
-    }
-
-    .${scope} .svg-image-container svg #max-precipitation-pattern line {
-      stroke: ${config.maxPrecipitationColor} !important;
-      opacity: 1 !important;
-    }
   `
   }
   getStyle = (config: IMConfig): SerializedStyles => css`

@@ -23,7 +23,6 @@ export default {
     windLineColor: 'Wind m/s',
     windGustLineColor: 'Wind Gust',
     precipitationBarColor: 'Precipitation',
-    maxPrecipitationColor: 'Max Precipitation',
     refreshButtonBackground: 'Refresh Button Background',
     refreshButtonIcon: 'Refresh Button Icon',
     expandPopupStyling: 'Expand & Popup Styling',

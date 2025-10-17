@@ -27,7 +27,6 @@ export interface Config {
   windLineColor: string
   windGustLineColor: string
   precipitationBarColor: string
-  maxPrecipitationColor: string
 
   // UI buttons
   refreshButtonBackgroundColor: string

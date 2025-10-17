@@ -183,9 +183,6 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
           <SettingRow label={intl.formatMessage({ id: 'precipitationBarColor', defaultMessage: defaultMessages.precipitationBarColor })}>
             <ThemeColorPicker value={config.precipitationBarColor} onChange={(color) => { this.onConfigChange('precipitationBarColor', color) }} />
           </SettingRow>
-          <SettingRow label={intl.formatMessage({ id: 'maxPrecipitationColor', defaultMessage: defaultMessages.maxPrecipitationColor })}>
-            <ThemeColorPicker value={config.maxPrecipitationColor} onChange={(color) => { this.onConfigChange('maxPrecipitationColor', color) }} />
-          </SettingRow>
         </SettingSection>
 
         <SettingSection title={intl.formatMessage({ id: 'expandPopupStyling', defaultMessage: defaultMessages.expandPopupStyling })}>
