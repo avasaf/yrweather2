@@ -6,12 +6,20 @@ import { ThemeColorPicker } from 'jimu-ui/basic/color-picker'
 import { type IMConfig } from '../runtime/config'
 import defaultMessages from './translations/default'
 
+const DEFAULT_USER_AGENT = 'YrWeatherExperienceWidget/1.0 (https://your-domain.example contact@example.com)'
+
 export default class Setting extends React.PureComponent<AllWidgetSettingProps<IMConfig>, unknown> {
   onConfigChange = (key: string, value: any): void => {
-    this.props.onSettingChange({
-      id: this.props.id,
-      config: this.props.config.set(key, value)
-    })
+    const { id, config, onSettingChange } = this.props
+
+    if (typeof onSettingChange === 'function') {
+      onSettingChange({
+        id,
+        config: config.set(key, value)
+      })
+    } else {
+      console.warn('onSettingChange is not available, skipping config update for key', key)
+    }
   }
 
   render(): React.ReactElement {
@@ -56,6 +64,17 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
               value={config.sourceUrl}
               onChange={(e) => { this.onConfigChange('sourceUrl', e.target.value) }}
               placeholder="https://www.yr.no/en/content/.../meteogram.svg"
+            />
+          </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <span style={{ ...labelTextStyle, display: 'block', marginBottom: '4px' }}>
+              {intl.formatMessage({ id: 'userAgent', defaultMessage: defaultMessages.userAgent })}
+            </span>
+            <TextInput
+              value={config.userAgent ?? DEFAULT_USER_AGENT}
+              onChange={(e) => { this.onConfigChange('userAgent', e.target.value) }}
+              placeholder="YourAppName/1.0 (https://example.com contact@example.com)"
             />
           </div>
 
@@ -117,27 +136,12 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
           </SettingRow>
         </SettingSection>
 
-        <SettingSection title={intl.formatMessage({ id: 'logoStyling', defaultMessage: defaultMessages.logoStyling })}>
-          <SettingRow label={intl.formatMessage({ id: 'yrLogoBackgroundColor', defaultMessage: defaultMessages.yrLogoBackgroundColor })}>
-            <ThemeColorPicker value={config.yrLogoBackgroundColor} onChange={(color) => { this.onConfigChange('yrLogoBackgroundColor', color) }} />
-          </SettingRow>
-          <SettingRow label={intl.formatMessage({ id: 'yrLogoTextColor', defaultMessage: defaultMessages.yrLogoTextColor })}>
-            <ThemeColorPicker value={config.yrLogoTextColor} onChange={(color) => { this.onConfigChange('yrLogoTextColor', color) }} />
-          </SettingRow>
-          <SettingRow label={intl.formatMessage({ id: 'logoColor', defaultMessage: defaultMessages.logoColor })}>
-            <ThemeColorPicker value={config.logoColor} onChange={(color) => { this.onConfigChange('logoColor', color) }} />
-          </SettingRow>
-        </SettingSection>
-
         <SettingSection title={intl.formatMessage({ id: 'textStyling', defaultMessage: defaultMessages.textStyling })}>
           <SettingRow label={intl.formatMessage({ id: 'mainTextColor', defaultMessage: defaultMessages.mainTextColor })}>
             <ThemeColorPicker value={config.mainTextColor} onChange={(color) => { this.onConfigChange('mainTextColor', color) }} />
           </SettingRow>
           <SettingRow label={intl.formatMessage({ id: 'secondaryTextColor', defaultMessage: defaultMessages.secondaryTextColor })}>
             <ThemeColorPicker value={config.secondaryTextColor} onChange={(color) => { this.onConfigChange('secondaryTextColor', color) }} />
-          </SettingRow>
-          <SettingRow label="Axis Icons">
-            <ThemeColorPicker value={config.yAxisIconColor} onChange={(color) => { this.onConfigChange('yAxisIconColor', color) }} />
           </SettingRow>
         </SettingSection>
 
@@ -154,6 +158,18 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
             <NumericInput style={narrowNumericBoxStyle} value={config.gridLineOpacity * 100} onAcceptValue={(value) => { this.onConfigChange('gridLineOpacity', value / 100) }} min={0} max={100} step={5} showHandlers={false} size="sm" suffix="%" />
           </div>
 
+          <SettingRow label={intl.formatMessage({ id: 'dayBoundaryColor', defaultMessage: defaultMessages.dayBoundaryColor })}>
+            <ThemeColorPicker value={config.dayBoundaryColor} onChange={(color) => { this.onConfigChange('dayBoundaryColor', color) }} />
+          </SettingRow>
+          <div style={horizontalRowStyle}>
+            <span style={labelTextStyle}>{intl.formatMessage({ id: 'dayBoundaryWidth', defaultMessage: defaultMessages.dayBoundaryWidth })}</span>
+            <NumericInput style={narrowNumericBoxStyle} value={config.dayBoundaryWidth} onAcceptValue={(value) => { this.onConfigChange('dayBoundaryWidth', value) }} min={0} step={0.5} showHandlers={false} size="sm" suffix="px" />
+          </div>
+          <div style={horizontalRowStyle}>
+            <span style={labelTextStyle}>{intl.formatMessage({ id: 'dayBoundaryOpacity', defaultMessage: defaultMessages.dayBoundaryOpacity })}</span>
+            <NumericInput style={narrowNumericBoxStyle} value={Math.round(((config.dayBoundaryOpacity ?? 0.6) * 100))} onAcceptValue={(value) => { this.onConfigChange('dayBoundaryOpacity', value / 100) }} min={0} max={100} step={5} showHandlers={false} size="sm" suffix="%" />
+          </div>
+
           <SettingRow label={intl.formatMessage({ id: 'temperatureLineColor', defaultMessage: defaultMessages.temperatureLineColor })}>
             <ThemeColorPicker value={config.temperatureLineColor} onChange={(color) => { this.onConfigChange('temperatureLineColor', color) }} />
           </SettingRow>
@@ -166,9 +182,6 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
 
           <SettingRow label={intl.formatMessage({ id: 'precipitationBarColor', defaultMessage: defaultMessages.precipitationBarColor })}>
             <ThemeColorPicker value={config.precipitationBarColor} onChange={(color) => { this.onConfigChange('precipitationBarColor', color) }} />
-          </SettingRow>
-          <SettingRow label={intl.formatMessage({ id: 'maxPrecipitationColor', defaultMessage: defaultMessages.maxPrecipitationColor })}>
-            <ThemeColorPicker value={config.maxPrecipitationColor} onChange={(color) => { this.onConfigChange('maxPrecipitationColor', color) }} />
           </SettingRow>
         </SettingSection>
 
