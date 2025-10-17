@@ -6,12 +6,20 @@ import { ThemeColorPicker } from 'jimu-ui/basic/color-picker'
 import { type IMConfig } from '../runtime/config'
 import defaultMessages from './translations/default'
 
+const DEFAULT_USER_AGENT = 'YrWeatherExperienceWidget/1.0 (https://your-domain.example contact@example.com)'
+
 export default class Setting extends React.PureComponent<AllWidgetSettingProps<IMConfig>, unknown> {
   onConfigChange = (key: string, value: any): void => {
-    this.props.onSettingChange({
-      id: this.props.id,
-      config: this.props.config.set(key, value)
-    })
+    const { id, config, onSettingChange } = this.props
+
+    if (typeof onSettingChange === 'function') {
+      onSettingChange({
+        id,
+        config: config.set(key, value)
+      })
+    } else {
+      console.warn('onSettingChange is not available, skipping config update for key', key)
+    }
   }
 
   render(): React.ReactElement {
@@ -56,6 +64,17 @@ export default class Setting extends React.PureComponent<AllWidgetSettingProps<I
               value={config.sourceUrl}
               onChange={(e) => { this.onConfigChange('sourceUrl', e.target.value) }}
               placeholder="https://www.yr.no/en/content/.../meteogram.svg"
+            />
+          </div>
+
+          <div style={{ marginBottom: '12px' }}>
+            <span style={{ ...labelTextStyle, display: 'block', marginBottom: '4px' }}>
+              {intl.formatMessage({ id: 'userAgent', defaultMessage: defaultMessages.userAgent })}
+            </span>
+            <TextInput
+              value={config.userAgent ?? DEFAULT_USER_AGENT}
+              onChange={(e) => { this.onConfigChange('userAgent', e.target.value) }}
+              placeholder="YourAppName/1.0 (https://example.com contact@example.com)"
             />
           </div>
 
