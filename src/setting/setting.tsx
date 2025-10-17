@@ -10,10 +10,16 @@ const DEFAULT_USER_AGENT = 'YrWeatherExperienceWidget/1.0 (https://your-domain.e
 
 export default class Setting extends React.PureComponent<AllWidgetSettingProps<IMConfig>, unknown> {
   onConfigChange = (key: string, value: any): void => {
-    this.props.onSettingChange({
-      id: this.props.id,
-      config: this.props.config.set(key, value)
-    })
+    const { id, config, onSettingChange } = this.props
+
+    if (typeof onSettingChange === 'function') {
+      onSettingChange({
+        id,
+        config: config.set(key, value)
+      })
+    } else {
+      console.warn('onSettingChange is not available, skipping config update for key', key)
+    }
   }
 
   render(): React.ReactElement {
