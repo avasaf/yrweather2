@@ -15,6 +15,27 @@ interface State {
 
 export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>, State> {
   private refreshIntervalId: NodeJS.Timer = null
+
+  private normalizeUrl = (url?: string | null): string | null => {
+    if (!url) return null
+    const trimmed = url.trim()
+    if (!trimmed) return null
+
+    const tryBuild = (candidate: string): string | null => {
+      try {
+        return new URL(candidate).toString()
+      } catch (err) {
+        return null
+      }
+    }
+
+    return (
+      tryBuild(trimmed) ||
+      tryBuild(`https://${trimmed}`) ||
+      tryBuild(`http://${trimmed}`) ||
+      trimmed
+    )
+  }
   constructor (props) {
     super(props)
     this.state = {
@@ -54,9 +75,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   handleDataSourceChange = () => {
     const { config } = this.props
+    const normalizedUrl = this.normalizeUrl(config.sourceUrl)
+    if (normalizedUrl && normalizedUrl !== config.sourceUrl) {
+      this.props.onSettingChange({
+        id: this.props.id,
+        config: this.props.config.set('sourceUrl', normalizedUrl)
+      })
+    }
     const fallbackSvg = this.getFallbackSvg()
-    if (config.sourceUrl) {
-      this.fetchSvgFromUrl(config.sourceUrl)
+    if (normalizedUrl) {
+      this.fetchSvgFromUrl(normalizedUrl)
     } else if (fallbackSvg) {
       this.processSvg(fallbackSvg)
     } else {
@@ -74,9 +102,10 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   setupAutoRefresh = (): void => {
     if (this.refreshIntervalId) clearInterval(this.refreshIntervalId)
-    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && this.props.config.sourceUrl) {
+    const normalizedUrl = this.normalizeUrl(this.props.config.sourceUrl)
+    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && normalizedUrl) {
       const ms = this.props.config.refreshInterval * 60 * 1000
-      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(this.props.config.sourceUrl), ms)
+      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(normalizedUrl), ms)
     }
   }
 
@@ -85,11 +114,19 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   }
 
   fetchSvgFromUrl = (url: string, attempt = 1): void => {
+    const normalizedUrl = this.normalizeUrl(url)
+    if (!normalizedUrl) {
+      this.setState({
+        isLoading: false,
+        error: 'Invalid Source URL provided.'
+      })
+      return
+    }
     if (attempt === 1) {
       this.setState({ isLoading: true, error: null })
     }
 
-    this.fetchSvgDirect(url, attempt)
+    this.fetchSvgDirect(normalizedUrl, attempt)
   }
 
   fetchSvgDirect = (url: string, attempt = 1): void => {
