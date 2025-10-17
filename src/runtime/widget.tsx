@@ -5,6 +5,8 @@ import ReactDOM from 'react-dom'
 import { type IMConfig } from './config'
 import { DEFAULT_METEOGRAM_SVG } from './defaultSvg'
 
+const DEFAULT_USER_AGENT = 'YrWeatherExperienceWidget/1.0 (https://your-domain.example contact@example.com)'
+
 interface State {
   svgHtml: string
   isLoading: boolean
@@ -13,8 +15,162 @@ interface State {
   expanded: boolean
 }
 
+type FetchTarget = { requestUrl: string, kind: 'svg' | 'locationforecast' }
+
+interface ForecastPoint {
+  date: Date
+  temperature: number | null
+  windSpeed: number | null
+  windGust: number | null
+  precipitation: number
+}
+
 export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>, State> {
   private refreshIntervalId: NodeJS.Timer = null
+  private lastModifiedHeader: string | null = null
+  private lastEtagHeader: string | null = null
+  private lastRequestUrl: string | null = null
+  private lastSourceInput: string | null = null
+  private userAgentHeaderWarningLogged = false
+  private fallbackUserAgent: string | null = null
+
+  private applyConfigUpdate = (updater: (config: IMConfig) => IMConfig, context: string): boolean => {
+    const { onSettingChange, id, config } = this.props
+    if (typeof onSettingChange === 'function') {
+      const nextConfig = updater(config)
+      if (nextConfig !== config) {
+        onSettingChange({
+          id,
+          config: nextConfig
+        })
+      }
+      return true
+    }
+
+    console.warn(`onSettingChange is not available (${context}), skipping config update.`)
+    return false
+  }
+
+  private normalizeUrl = (url?: string | null): string | null => {
+    if (!url) return null
+    const trimmed = url.trim()
+    if (!trimmed) return null
+
+    const tryBuild = (candidate: string): string | null => {
+      try {
+        return new URL(candidate).toString()
+      } catch (err) {
+        return null
+      }
+    }
+
+    return (
+      tryBuild(trimmed) ||
+      tryBuild(`https://${trimmed}`) ||
+      tryBuild(`http://${trimmed}`) ||
+      trimmed
+    )
+  }
+
+  private getEffectiveSourceInput = (): string | null => {
+    const normalized = this.normalizeUrl(this.props.config.sourceUrl)
+    if (normalized) return normalized
+    const raw = this.props.config.sourceUrl
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim()
+    }
+    return null
+  }
+
+  private truncateCoordinate = (value: number): string | null => {
+    if (!Number.isFinite(value)) return null
+    const truncated = Math.round(Math.abs(value) * 10000) / 10000
+    const signed = value < 0 ? -truncated : truncated
+    const fixed = signed.toFixed(4)
+    return fixed.replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1')
+  }
+
+  private resolveFetchTarget = (normalizedUrl: string): FetchTarget | null => {
+    try {
+      const parsed = new URL(normalizedUrl)
+      const host = parsed.hostname.toLowerCase()
+      const yrHost = host === 'www.yr.no' || host.endsWith('.yr.no')
+      if (yrHost) {
+        const decodedPath = decodeURIComponent(parsed.pathname)
+        const segments = decodedPath.split('/').filter(Boolean)
+        const contentIndex = segments.findIndex((segment) => segment.toLowerCase() === 'content')
+        if (contentIndex >= 0 && segments.length > contentIndex + 2) {
+          const locationSegment = segments[contentIndex + 1]
+          const resourceSegment = segments[contentIndex + 2]
+          if (/meteogram\.svg$/i.test(resourceSegment)) {
+            const coordParts = locationSegment.split(',')
+            if (coordParts.length >= 2) {
+              const lat = Number.parseFloat(coordParts[0])
+              const lon = Number.parseFloat(coordParts[1])
+              const latString = this.truncateCoordinate(lat)
+              const lonString = this.truncateCoordinate(lon)
+              if (latString && lonString) {
+                const params = new URLSearchParams()
+                parsed.searchParams.forEach((value, key) => {
+                  if (key.toLowerCase() === 'nocache') return
+                  if (key.toLowerCase() === 'altitude') {
+                    params.set('altitude', value)
+                    return
+                  }
+                })
+                params.set('lat', latString)
+                params.set('lon', lonString)
+                const altitude = params.get('altitude')
+                const altitudeFragment = altitude ? `&altitude=${encodeURIComponent(altitude)}` : ''
+                const apiUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${encodeURIComponent(latString)}&lon=${encodeURIComponent(lonString)}${altitudeFragment}`
+                return { requestUrl: apiUrl, kind: 'locationforecast' }
+              }
+            }
+          }
+        }
+      }
+      if (host === 'api.met.no') {
+        const path = parsed.pathname.toLowerCase()
+        if (path.includes('/weatherapi/locationforecast/2.0/')) {
+          return { requestUrl: parsed.toString(), kind: 'locationforecast' }
+        }
+        if (path.endsWith('/meteogram/2.0/classic')) {
+          const urlObj = new URL(parsed.toString())
+          const lat = urlObj.searchParams.get('lat')
+          const lon = urlObj.searchParams.get('lon')
+          const latString = this.truncateCoordinate(Number.parseFloat(lat ?? ''))
+          const lonString = this.truncateCoordinate(Number.parseFloat(lon ?? ''))
+          const altitude = urlObj.searchParams.get('altitude')
+          if (latString && lonString) {
+            const altitudeFragment = altitude ? `&altitude=${encodeURIComponent(altitude)}` : ''
+            const apiUrl = `https://api.met.no/weatherapi/locationforecast/2.0/compact?lat=${encodeURIComponent(latString)}&lon=${encodeURIComponent(lonString)}${altitudeFragment}`
+            return { requestUrl: apiUrl, kind: 'locationforecast' }
+          }
+        }
+      }
+      return { requestUrl: parsed.toString(), kind: 'svg' }
+    } catch (err) {
+      // ignore resolution errors and fall back to the normalized URL
+    }
+    return { requestUrl: normalizedUrl, kind: 'svg' }
+  }
+
+  private getEffectiveUserAgent = (): string | null => {
+    const configured = this.props.config.userAgent
+    if (typeof configured === 'string') {
+      const trimmed = configured.trim()
+      if (trimmed) {
+        return trimmed
+      }
+      if (configured.length > 0) {
+        return null
+      }
+    }
+    if (this.fallbackUserAgent) {
+      return this.fallbackUserAgent
+    }
+    return DEFAULT_USER_AGENT
+  }
   constructor (props) {
     super(props)
     this.state = {
@@ -37,9 +193,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const fetchRelevantChanged =
       cfg.sourceUrl !== prev.sourceUrl ||
       cfg.autoRefreshEnabled !== prev.autoRefreshEnabled ||
-      cfg.refreshInterval !== prev.refreshInterval
+      cfg.refreshInterval !== prev.refreshInterval ||
+      cfg.userAgent !== prev.userAgent
 
     if (fetchRelevantChanged) {
+      if (cfg.userAgent !== prev.userAgent) {
+        this.userAgentHeaderWarningLogged = false
+      }
       this.handleDataSourceChange()
       this.setupAutoRefresh()
     } else if (cfg !== prev) {
@@ -54,9 +214,37 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   handleDataSourceChange = () => {
     const { config } = this.props
+    const hasUserAgentConfigured = typeof config.userAgent === 'string'
+
+    if (!hasUserAgentConfigured) {
+      const applied = this.applyConfigUpdate(cfg => cfg.set('userAgent', DEFAULT_USER_AGENT), 'apply default user agent')
+      if (applied) {
+        return
+      }
+      this.fallbackUserAgent = DEFAULT_USER_AGENT
+    } else {
+      this.fallbackUserAgent = null
+    }
+
+    const normalizedUrl = this.normalizeUrl(config.sourceUrl)
+    if (normalizedUrl && normalizedUrl !== config.sourceUrl) {
+      const applied = this.applyConfigUpdate(cfg => cfg.set('sourceUrl', normalizedUrl), 'normalize source URL')
+      if (applied) {
+        return
+      }
+    }
+
+    const effectiveUrl = normalizedUrl ?? (config.sourceUrl?.trim() ? config.sourceUrl.trim() : null)
+
+    if (effectiveUrl !== this.lastSourceInput) {
+      this.lastModifiedHeader = null
+      this.lastEtagHeader = null
+      this.lastRequestUrl = null
+      this.lastSourceInput = effectiveUrl
+    }
     const fallbackSvg = this.getFallbackSvg()
-    if (config.sourceUrl) {
-      this.fetchSvgFromUrl(config.sourceUrl)
+    if (effectiveUrl) {
+      this.fetchSvgFromUrl(effectiveUrl)
     } else if (fallbackSvg) {
       this.processSvg(fallbackSvg)
     } else {
@@ -74,9 +262,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   setupAutoRefresh = (): void => {
     if (this.refreshIntervalId) clearInterval(this.refreshIntervalId)
-    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && this.props.config.sourceUrl) {
+    const effectiveUrl = this.getEffectiveSourceInput()
+    if (!this.getEffectiveUserAgent()) {
+      return
+    }
+    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && effectiveUrl) {
       const ms = this.props.config.refreshInterval * 60 * 1000
-      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(this.props.config.sourceUrl), ms)
+      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(effectiveUrl), ms)
     }
   }
 
@@ -85,21 +277,56 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   }
 
   fetchSvgFromUrl = (url: string, attempt = 1): void => {
+    const normalizedUrl = this.normalizeUrl(url)
+    if (!normalizedUrl) {
+      this.setState({
+        isLoading: false,
+        error: 'Invalid Source URL provided.'
+      })
+      return
+    }
+    const fetchTarget = this.resolveFetchTarget(normalizedUrl)
+    if (!fetchTarget) {
+      this.setState({
+        isLoading: false,
+        error: 'Unable to resolve a meteogram endpoint from the provided Source URL.'
+      })
+      return
+    }
+    const configuredUserAgent = this.getEffectiveUserAgent()
+    if (!configuredUserAgent) {
+      this.setState({
+        isLoading: false,
+        error: 'Please configure a valid MET API User Agent before fetching data.'
+      })
+      return
+    }
+    if (fetchTarget.requestUrl !== this.lastRequestUrl) {
+      this.lastModifiedHeader = null
+      this.lastEtagHeader = null
+      this.lastRequestUrl = fetchTarget.requestUrl
+    }
     if (attempt === 1) {
       this.setState({ isLoading: true, error: null })
     }
-
-    this.fetchSvgDirect(url, attempt)
+    if (fetchTarget.kind === 'locationforecast') {
+      this.fetchFromLocationForecast(fetchTarget.requestUrl, attempt)
+    } else {
+      this.fetchSvgDirect(fetchTarget.requestUrl, attempt)
+    }
   }
 
-  fetchSvgDirect = (url: string, attempt = 1): void => {
+  private fetchFromLocationForecast = (url: string, attempt = 1): void => {
+    const hasConditionalHeaders = Boolean(this.lastModifiedHeader || this.lastEtagHeader)
     let requestUrl = url
-    try {
-      const urlObj = new URL(url)
-      urlObj.searchParams.set('nocache', Date.now().toString())
-      requestUrl = urlObj.toString()
-    } catch (err) {
-      requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
+    if (!hasConditionalHeaders) {
+      try {
+        const urlObj = new URL(url)
+        urlObj.searchParams.set('nocache', Date.now().toString())
+        requestUrl = urlObj.toString()
+      } catch (err) {
+        requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
+      }
     }
 
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
@@ -108,17 +335,396 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       timeoutId = setTimeout(() => controller.abort(), 15000)
     }
 
+    const headers = new Headers({ Accept: 'application/json' })
+    const userAgent = this.getEffectiveUserAgent()
+    if (userAgent) {
+      try {
+        headers.set('User-Agent', userAgent)
+      } catch (err) {
+        if (!this.userAgentHeaderWarningLogged) {
+          console.warn('Unable to set User-Agent header for MET request. Ensure widget runs in an environment that allows custom headers.', err)
+          this.userAgentHeaderWarningLogged = true
+        }
+      }
+    }
+    if (this.lastModifiedHeader) headers.set('If-Modified-Since', this.lastModifiedHeader)
+    if (this.lastEtagHeader) headers.set('If-None-Match', this.lastEtagHeader)
+
     const fetchOptions: RequestInit = {
-      cache: 'no-store',
+      cache: hasConditionalHeaders ? 'no-cache' : 'no-store',
       mode: 'cors',
       credentials: 'omit',
-      headers: { Accept: 'image/svg+xml,text/html;q=0.9,*/*;q=0.8' }
+      headers
     }
     if (controller) fetchOptions.signal = controller.signal
 
     fetch(requestUrl, fetchOptions)
-      .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.text() })
+      .then(async r => {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+        if (r.status === 304) {
+          this.setState({ isLoading: false, error: null })
+          return null
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const lastModified = r.headers.get('last-modified')
+        const etag = r.headers.get('etag')
+        if (lastModified) this.lastModifiedHeader = lastModified
+        if (etag) this.lastEtagHeader = etag
+        return r.json()
+      })
+      .then(json => {
+        if (!json) {
+          return
+        }
+        const svgString = this.buildSvgFromLocationForecast(json)
+        this.processSvg(svgString)
+        if (svgString.startsWith('<svg')) {
+          this.applyConfigUpdate(cfg => cfg.set('svgCode', svgString), 'store fetched SVG from Locationforecast')
+        }
+      })
+      .catch(err => {
+        if (controller) controller.abort()
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+        if ((err as any)?.name === 'AbortError') {
+          return
+        }
+        if (attempt < 5) {
+          setTimeout(() => this.fetchFromLocationForecast(url, attempt + 1), 1000 * attempt)
+          return
+        }
+        console.error('Failed to fetch Locationforecast data:', err)
+        const fallback = this.state.rawSvg || this.getFallbackSvg()
+        if (fallback && fallback.trim().startsWith('<svg')) {
+          this.processSvg(fallback)
+          return
+        }
+        this.setState({
+          isLoading: false,
+          error: 'Unable to load forecast data from source.'
+        })
+      })
+      .finally(() => {
+        if (timeoutId) clearTimeout(timeoutId)
+      })
+  }
+
+  private computeChartYPosition = (value: number, min: number, range: number, height: number, top: number): number => {
+    if (!Number.isFinite(value)) {
+      return height + top
+    }
+    if (range === 0) {
+      return top + height / 2
+    }
+    const normalized = (value - min) / range
+    return top + height - (normalized * height)
+  }
+
+  private buildSvgFromLocationForecast = (forecastJson: any): string => {
+    const timeseries = forecastJson?.properties?.timeseries
+    if (!Array.isArray(timeseries) || timeseries.length === 0) {
+      throw new Error('Locationforecast response does not contain any timeseries data.')
+    }
+
+    const rawPoints = timeseries
+      .slice(0, 48)
+      .map(entry => {
+        const isoTime = entry?.time
+        const date = isoTime ? new Date(isoTime) : null
+        const details = entry?.data?.instant?.details ?? {}
+        const nextHour = entry?.data?.next_1_hours?.details ?? entry?.data?.next_6_hours?.details ?? entry?.data?.next_12_hours?.details ?? {}
+
+        const temperatureRaw = Number(details?.air_temperature)
+        const windSpeedRaw = Number(details?.wind_speed)
+        const windGustRaw = Number(details?.wind_speed_of_gust)
+        const precipitationRaw = Number(nextHour?.precipitation_amount)
+
+        return {
+          date,
+          temperature: Number.isFinite(temperatureRaw) ? temperatureRaw : null,
+          windSpeed: Number.isFinite(windSpeedRaw) ? windSpeedRaw : null,
+          windGust: Number.isFinite(windGustRaw) ? windGustRaw : null,
+          precipitation: Number.isFinite(precipitationRaw) ? Math.max(precipitationRaw, 0) : 0
+        }
+      })
+    const points: ForecastPoint[] = rawPoints
+      .filter((p): p is ForecastPoint => p.date instanceof Date && !Number.isNaN(p.date.getTime()))
+
+    if (points.length === 0) {
+      throw new Error('Unable to parse any valid forecast points from Locationforecast response.')
+    }
+
+    const temperatures = points.map(p => p.temperature).filter((v): v is number => Number.isFinite(v))
+    const winds = points.map(p => p.windSpeed).filter((v): v is number => Number.isFinite(v))
+    const gusts = points.map(p => p.windGust).filter((v): v is number => Number.isFinite(v))
+    const precipitationValues = points.map(p => p.precipitation ?? 0)
+
+    const tempMin = temperatures.length ? Math.min(...temperatures) : 0
+    const tempMax = temperatures.length ? Math.max(...temperatures) : 0
+    const tempRange = tempMax - tempMin || 10
+
+    const windMax = winds.length ? Math.max(...winds) : 0
+    const gustMax = gusts.length ? Math.max(...gusts) : 0
+    const windRange = Math.max(windMax, gustMax, 5)
+
+    const precipMax = Math.max(...precipitationValues, 1)
+
+    const width = 860
+    const paddingLeft = 80
+    const paddingRight = 40
+    const paddingTop = 40
+    const paddingBottom = 140
+    const tempChartHeight = 240
+    const windChartHeight = 100
+    const precipChartHeight = 100
+    const sectionGap = 40
+    const tempSectionTop = paddingTop
+    const tempSectionBottom = tempSectionTop + tempChartHeight
+    const windSectionTop = tempSectionBottom + sectionGap
+    const windSectionBottom = windSectionTop + windChartHeight
+    const precipSectionTop = windSectionBottom + sectionGap
+    const precipSectionBottom = precipSectionTop + precipChartHeight
+    const chartBottom = precipSectionBottom
+    const height = chartBottom + paddingBottom
+    const chartWidth = width - paddingLeft - paddingRight
+
+    const step = points.length > 1 ? chartWidth / (points.length - 1) : chartWidth
+
+    const formatHourLabel = (date: Date): string => {
+      const hours = date.getHours().toString().padStart(2, '0')
+      const day = date.getDate().toString().padStart(2, '0')
+      const month = (date.getMonth() + 1).toString().padStart(2, '0')
+      return `${day}.${month} ${hours}:00`
+    }
+
+    const gridLines: string[] = []
+    const gridCount = 6
+    for (let i = 0; i <= gridCount; i++) {
+      const y = paddingTop + (tempChartHeight / gridCount) * i
+      gridLines.push(`<line x1="${paddingLeft}" y1="${y.toFixed(2)}" x2="${(width - paddingRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="#56616c" stroke-width="1" stroke-opacity="0.4" />`)
+    }
+
+    const sectionSeparators = [
+      tempSectionTop,
+      tempSectionBottom,
+      windSectionTop,
+      windSectionBottom,
+      precipSectionTop,
+      precipSectionBottom
+    ].map(y => `<line x1="${paddingLeft}" y1="${y.toFixed(2)}" x2="${(width - paddingRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="#56616c" stroke-width="1" stroke-opacity="0.6" />`)
+
+    const tempPathSegments: string[] = []
+    points.forEach((point, idx) => {
+      if (!Number.isFinite(point.temperature)) {
+        return
+      }
+      const x = paddingLeft + step * idx
+      const y = this.computeChartYPosition(point.temperature, tempMin, tempRange, tempChartHeight, paddingTop)
+      tempPathSegments.push(`${tempPathSegments.length === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`)
+    })
+
+    const temperaturePath = tempPathSegments.length > 1
+      ? `<path d="${tempPathSegments.join(' ')}" fill="none" stroke="#c60000" stroke-width="2" />`
+      : ''
+
+    const windPathSegments: string[] = []
+    points.forEach((point, idx) => {
+      if (!Number.isFinite(point.windSpeed)) {
+        return
+      }
+      const x = paddingLeft + step * idx
+      const y = windSectionTop + (windChartHeight - (Math.min(point.windSpeed, windRange) / windRange) * windChartHeight)
+      windPathSegments.push(`${windPathSegments.length === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`)
+    })
+
+    const gustPathSegments: string[] = []
+    points.forEach((point, idx) => {
+      if (!Number.isFinite(point.windGust)) {
+        return
+      }
+      const x = paddingLeft + step * idx
+      const y = windSectionTop + (windChartHeight - (Math.min(point.windGust, windRange) / windRange) * windChartHeight)
+      gustPathSegments.push(`${gustPathSegments.length === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`)
+    })
+
+    const windPath = windPathSegments.length > 1
+      ? `<path d="${windPathSegments.join(' ')}" fill="none" stroke="#aa00f2" stroke-width="2" />`
+      : ''
+
+    const gustPath = gustPathSegments.length > 1
+      ? `<path d="${gustPathSegments.join(' ')}" fill="none" stroke="#aa00f2" stroke-width="2" stroke-dasharray="6 4" />`
+      : ''
+
+    const precipitationRects: string[] = []
+    points.forEach((point, idx) => {
+      const value = Math.max(point.precipitation ?? 0, 0)
+      if (value <= 0) {
+        return
+      }
+      const xCenter = paddingLeft + step * idx
+      const barWidth = Math.min(step * 0.6, 14)
+      const x = xCenter - barWidth / 2
+      const scaled = Math.min(value / precipMax, 1)
+      const heightValue = scaled * precipChartHeight
+      const y = precipSectionTop + (precipChartHeight - heightValue)
+      precipitationRects.push(`<rect x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${barWidth.toFixed(2)}" height="${heightValue.toFixed(2)}" fill="#006edb" />`)
+    })
+
+    const timeLabels: string[] = []
+    const labelCount = Math.min(points.length, 16)
+    const interval = Math.max(1, Math.floor(points.length / labelCount))
+    points.forEach((point, idx) => {
+      if (idx % interval !== 0 && idx !== points.length - 1) {
+        return
+      }
+      const x = paddingLeft + step * idx
+      const y = chartBottom + 40
+      timeLabels.push(`<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" class="hour-label" text-anchor="middle" fill="#56616c" font-size="12">${formatHourLabel(point.date)}</text>`)
+    })
+
+    const temperatureLabels: string[] = []
+    const tempStep = tempRange / 4
+    for (let i = 0; i <= 4; i++) {
+      const value = tempMin + tempStep * i
+      const y = this.computeChartYPosition(value, tempMin, tempRange, tempChartHeight, paddingTop)
+      temperatureLabels.push(`<text x="${(paddingLeft - 10).toFixed(2)}" y="${(y + 4).toFixed(2)}" class="y-axis-label temperature-label" text-anchor="end" fill="#56616c" font-size="12">${value.toFixed(1)}°C</text>`)
+    }
+
+    const windLabels: string[] = []
+    const windStep = windRange / 4
+    for (let i = 0; i <= 4; i++) {
+      const value = windStep * i
+      const y = windSectionTop + (windChartHeight - (value / windRange) * windChartHeight)
+      windLabels.push(`<text x="${(paddingLeft - 10).toFixed(2)}" y="${(y + 4).toFixed(2)}" class="y-axis-label wind-label" text-anchor="end" fill="#56616c" font-size="12">${value.toFixed(1)} m/s</text>`)
+    }
+
+    const precipitationLabels: string[] = []
+    const precipStep = precipMax / 4
+    for (let i = 0; i <= 4; i++) {
+      const value = precipStep * i
+      const y = precipSectionTop + (precipChartHeight - (value / precipMax) * precipChartHeight)
+      precipitationLabels.push(`<text x="${(paddingLeft - 10).toFixed(2)}" y="${(y + 4).toFixed(2)}" class="y-axis-label precipitation-label" text-anchor="end" fill="#56616c" font-size="12">${value.toFixed(1)} mm</text>`)
+    }
+
+    const tempPointsMarkers: string[] = []
+    points.forEach((point, idx) => {
+      if (!Number.isFinite(point.temperature)) return
+      const x = paddingLeft + step * idx
+      const y = this.computeChartYPosition(point.temperature, tempMin, tempRange, tempChartHeight, paddingTop)
+      tempPointsMarkers.push(`<circle cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="2" fill="#c60000" />`)
+    })
+
+    const sectionLabels = [
+      { text: 'Temperature', x: paddingLeft, y: tempSectionTop - 12 },
+      { text: 'Wind speed / gust', x: paddingLeft, y: windSectionTop - 12 },
+      { text: 'Precipitation', x: paddingLeft, y: precipSectionTop - 12 }
+    ].map(({ text, x, y }) => `<text x="${x.toFixed(2)}" y="${y.toFixed(2)}" class="legend-label" text-anchor="start" fill="#56616c" font-size="14" font-weight="600">${text}</text>`)
+
+    const defs = `
+      <defs>
+        <pattern id="max-precipitation-pattern" patternUnits="userSpaceOnUse" width="4" height="4">
+          <rect x="0" y="0" width="4" height="4" fill="#006edb" opacity="0.3" />
+          <line x1="0" y1="0" x2="4" y2="4" stroke="#006edb" stroke-width="0.5" opacity="0.6" />
+          <line x1="4" y1="0" x2="0" y2="4" stroke="#006edb" stroke-width="0.5" opacity="0.6" />
+        </pattern>
+      </defs>
+    `
+
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Yr Weather Forecast">
+  <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
+  ${defs}
+  <g font-family="'Arial', sans-serif">
+    <g>
+      ${gridLines.join('')}
+      ${sectionSeparators.join('')}
+      ${temperaturePath}
+      ${tempPointsMarkers.join('')}
+      ${windPath}
+      ${gustPath}
+      ${precipitationRects.join('')}
+    </g>
+    <g>
+      ${temperatureLabels.join('')}
+      ${windLabels.join('')}
+      ${precipitationLabels.join('')}
+    </g>
+    <g>
+      ${timeLabels.join('')}
+      ${sectionLabels.join('')}
+    </g>
+  </g>
+</svg>`
+  }
+
+  fetchSvgDirect = (url: string, attempt = 1): void => {
+    const hasConditionalHeaders = Boolean(this.lastModifiedHeader || this.lastEtagHeader)
+    let requestUrl = url
+    if (!hasConditionalHeaders) {
+      try {
+        const urlObj = new URL(url)
+        urlObj.searchParams.set('nocache', Date.now().toString())
+        requestUrl = urlObj.toString()
+      } catch (err) {
+        requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
+      }
+    }
+
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
+    let timeoutId: ReturnType<typeof setTimeout> | null = null
+    if (controller) {
+      timeoutId = setTimeout(() => controller.abort(), 15000)
+    }
+
+    const headers = new Headers({ Accept: 'image/svg+xml,text/html;q=0.9,*/*;q=0.8' })
+    const userAgent = this.getEffectiveUserAgent()
+    if (userAgent) {
+      try {
+        headers.set('User-Agent', userAgent)
+      } catch (err) {
+        if (!this.userAgentHeaderWarningLogged) {
+          console.warn('Unable to set User-Agent header for MET request. Ensure widget runs in an environment that allows custom headers.', err)
+          this.userAgentHeaderWarningLogged = true
+        }
+      }
+    }
+    if (this.lastModifiedHeader) headers.set('If-Modified-Since', this.lastModifiedHeader)
+    if (this.lastEtagHeader) headers.set('If-None-Match', this.lastEtagHeader)
+
+    const fetchOptions: RequestInit = {
+      cache: hasConditionalHeaders ? 'no-cache' : 'no-store',
+      mode: 'cors',
+      credentials: 'omit',
+      headers
+    }
+    if (controller) fetchOptions.signal = controller.signal
+
+    fetch(requestUrl, fetchOptions)
+      .then(r => {
+        if (timeoutId) {
+          clearTimeout(timeoutId)
+          timeoutId = null
+        }
+        if (r.status === 304) {
+          this.setState({ isLoading: false, error: null })
+          return null
+        }
+        if (!r.ok) throw new Error(`HTTP ${r.status}`)
+        const lastModified = r.headers.get('last-modified')
+        const etag = r.headers.get('etag')
+        if (lastModified) this.lastModifiedHeader = lastModified
+        if (etag) this.lastEtagHeader = etag
+        return r.text()
+      })
       .then(text => {
+        if (!text) {
+          return
+        }
         const t = text.trim()
         let svgString: string
 
@@ -134,10 +740,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         this.processSvg(svgString)
 
         if (svgString.startsWith('<svg')) {
-          this.props.onSettingChange({
-            id: this.props.id,
-            config: this.props.config.set('svgCode', svgString)
-          })
+          this.applyConfigUpdate(cfg => cfg.set('svgCode', svgString), 'store fetched SVG')
         }
       })
       .catch(err => {
@@ -145,6 +748,9 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         if (timeoutId) {
           clearTimeout(timeoutId)
           timeoutId = null
+        }
+        if ((err as any)?.name === 'AbortError') {
+          return
         }
         if (attempt < 5) {
           setTimeout(() => this.fetchSvgDirect(url, attempt + 1), 1000 * attempt)
@@ -242,6 +848,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   private renderContent = (config: IMConfig, expanded: boolean): React.ReactNode => {
     const { isLoading, error, svgHtml } = this.state
+    const effectiveSourceUrl = this.getEffectiveSourceInput()
 
     const popupBorderRadius = Number.isFinite(config.popupBorderRadius) ? config.popupBorderRadius : 0
 
@@ -284,11 +891,11 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       return wrappedContent(
         <div style={{ padding: '10px', textAlign: 'center', color: 'red' }}>
           {error}
-          {config.sourceUrl && (
+          {effectiveSourceUrl && (
             <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center' }}>
               <button
                 className="action-button refresh-button large"
-                onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+                onClick={() => this.fetchSvgFromUrl(effectiveSourceUrl)}
                 title="Refresh graph"
                 aria-label="Refresh graph"
               >
@@ -538,16 +1145,17 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     }
   `
 
-  render(): React.ReactElement {
+  render(): React.ReactElement { 
     const { config, id } = this.props
     const { expanded } = this.state
     const scopeClass = `yrw-${id}`
 
+    const effectiveSourceUrl = this.getEffectiveSourceInput()
     const content = this.renderContent(config, false)
 
     const popupContent = this.renderContent(config, true)
 
-    const showControls = this.props.config.sourceUrl && !expanded && !this.state.error
+    const showControls = effectiveSourceUrl && !expanded && !this.state.error
 
     return (
       <div className={scopeClass} css={this.getStyle(config)}>
@@ -557,7 +1165,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
           <div className="button-container">
             <button
               className="action-button refresh-button"
-              onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+              onClick={() => effectiveSourceUrl && this.fetchSvgFromUrl(effectiveSourceUrl)}
               title="Refresh graph"
               aria-label="Refresh graph"
             >{this.renderRefreshIcon()}</button>
@@ -614,7 +1222,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
               <div className="button-container">
                 <button
                   className="action-button refresh-button"
-                  onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+                  onClick={() => effectiveSourceUrl && this.fetchSvgFromUrl(effectiveSourceUrl)}
                   title="Refresh graph"
                   aria-label="Refresh graph"
                 >
