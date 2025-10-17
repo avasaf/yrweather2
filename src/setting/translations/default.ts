@@ -2,6 +2,7 @@ export default {
     dataSource: 'Data Source',
     sourceUrl: 'Source URL',
     autoRefresh: 'Auto Refresh',
+    userAgent: 'MET API User Agent',
     refreshInterval: 'Refresh Interval',
     fallbackContent: 'Fallback SVG Code',
     svgCodePlaceholder: 'Paste SVG code here (used if URL fails or is empty)',
