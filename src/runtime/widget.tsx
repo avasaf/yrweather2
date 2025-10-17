@@ -682,27 +682,27 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       precipScaleMax = 1
     }
 
-    const width = 1048
-    const marginLeft = 92
-    const marginRight = 132
+    const width = 1360
+    const marginLeft = 104
+    const marginRight = 148
     const chartWidth = width - marginLeft - marginRight
 
-    const dayLabelY = 44
-    const hourLabelY = dayLabelY + 22
-    const weatherTop = hourLabelY + 40
-    const weatherHeight = 236
+    const dayLabelY = 48
+    const hourLabelY = dayLabelY + 24
+    const weatherTop = hourLabelY + 46
+    const weatherHeight = 248
     const weatherBottom = weatherTop + weatherHeight
     const precipAreaHeight = Math.min(92, weatherHeight * 0.42)
     const precipAreaTop = weatherBottom - precipAreaHeight
     const windGap = 48
     const windAreaTop = weatherBottom + windGap
-    const windAreaHeight = 148
+    const windAreaHeight = 164
     const windAreaBottom = windAreaTop + windAreaHeight
-    const iconRowY = weatherTop - 30
-    const arrowRowY = windAreaBottom + 32
-    const legendY = arrowRowY + 30
-    const titleY = legendY + 44
-    const height = titleY + 40
+    const iconRowY = weatherTop - 32
+    const arrowRowY = windAreaBottom + 36
+    const legendY = arrowRowY + 38
+    const titleY = legendY + 52
+    const height = titleY + 48
 
     const step = chartWidth / (points.length - 1)
     const getX = (idx: number) => marginLeft + step * idx
@@ -746,7 +746,10 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         const dayBoundaryWidth = typeof config?.dayBoundaryWidth === 'number' ? config.dayBoundaryWidth : 2
         const rawOpacity = typeof config?.dayBoundaryOpacity === 'number' ? config.dayBoundaryOpacity : 0.6
         const dayBoundaryOpacity = Number.isFinite(rawOpacity) ? Math.min(Math.max(rawOpacity, 0), 1) : 0.6
-        dayBoundaryLines.push(`<line x1="${boundaryX.toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${boundaryX.toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${dayBoundaryColor}" stroke-width="${dayBoundaryWidth}" stroke-opacity="${dayBoundaryOpacity}" />`)
+        dayBoundaryLines.push([
+          `<line x1="${boundaryX.toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${boundaryX.toFixed(2)}" y2="${weatherBottom.toFixed(2)}" stroke="${dayBoundaryColor}" stroke-width="${dayBoundaryWidth}" stroke-opacity="${dayBoundaryOpacity}" />`,
+          `<line x1="${boundaryX.toFixed(2)}" y1="${windAreaTop.toFixed(2)}" x2="${boundaryX.toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${dayBoundaryColor}" stroke-width="${dayBoundaryWidth}" stroke-opacity="${dayBoundaryOpacity}" />`
+        ].join(''))
       }
     })
 
@@ -768,7 +771,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       const y = windY(value)
       windHorizontalLines.push(`<line x1="${marginLeft.toFixed(2)}" y1="${y.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="${(typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1).toFixed(2)}" stroke-opacity="${(Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1) * 0.9}" />`)
       const labelY = windAreaBottom - (value / Math.max(windScaleMax, 1)) * (windAreaHeight - windLabelBaseOffset)
-      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(marginLeft - 16).toFixed(2)}" y="${labelY.toFixed(2)}" text-anchor="end" dominant-baseline="middle">${value.toFixed(value < 10 ? 1 : 0)}</text>`)
+      const windLabel = value.toFixed(value < 10 ? 1 : 0).replace(/\.0$/, '')
+      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(marginLeft - 18).toFixed(2)}" y="${labelY.toFixed(2)}" text-anchor="end" dominant-baseline="middle">${windLabel} m/s</text>`)
     }
 
     const verticalLines: string[] = []
@@ -781,8 +785,11 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       const gridColor = config?.gridLineColor ?? '#c3d0d8'
       const gridWidth = typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1
       const gridOpacity = Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1
-      verticalLines.push(`<line x1="${x.toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${x.toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${gridColor}" stroke-width="${(gridWidth * 0.85).toFixed(2)}" stroke-opacity="${(gridOpacity * 0.75).toFixed(2)}" stroke-dasharray="2 6" />`)
-      hourLabels.push(`<text class="hour-label" x="${x.toFixed(2)}" y="${hourLabelY.toFixed(2)}" text-anchor="middle">${hours.toString().padStart(2, '0')}:00</text>`)
+      verticalLines.push([
+        `<line x1="${x.toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${x.toFixed(2)}" y2="${weatherBottom.toFixed(2)}" stroke="${gridColor}" stroke-width="${(gridWidth * 0.85).toFixed(2)}" stroke-opacity="${(gridOpacity * 0.75).toFixed(2)}" stroke-dasharray="2 6" />`,
+        `<line x1="${x.toFixed(2)}" y1="${windAreaTop.toFixed(2)}" x2="${x.toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${gridColor}" stroke-width="${(gridWidth * 0.85).toFixed(2)}" stroke-opacity="${(gridOpacity * 0.75).toFixed(2)}" stroke-dasharray="2 6" />`
+      ].join(''))
+      hourLabels.push(`<text class="hour-label" x="${x.toFixed(2)}" y="${hourLabelY.toFixed(2)}" text-anchor="middle">${hours.toString()}</text>`)
     })
 
     const temperaturePathPoints: string[] = []
@@ -835,12 +842,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     for (let i = 0; i <= precipTicks; i++) {
       const value = (precipScaleMax / precipTicks) * i
       const y = precipAxisTop + precipAxisHeight - (value / Math.max(precipScaleMax, 1)) * precipAxisHeight
-      precipAxisLabels.push(`<text class="y-axis-label precipitation-label" x="${(width - marginRight + 20).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" text-anchor="start">${value.toFixed(value < 1 ? 1 : 0)}</text>`)
+      const precipLabel = value.toFixed(value < 1 ? 1 : 0).replace(/\.0$/, '')
+      precipAxisLabels.push(`<text class="y-axis-label precipitation-label" x="${(width - marginRight + 22).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" text-anchor="start">${precipLabel} mm</text>`)
     }
 
-    const iconInterval = Math.max(1, Math.round(points.length / 18))
+    const iconInterval = Math.max(1, Math.round(points.length / 20))
     const iconElements: string[] = []
-    const iconSize = 24
+    const iconSize = 22
     points.forEach((point, idx) => {
       if (idx % iconInterval !== 0 && idx !== points.length - 1) return
       const category = this.getWeatherSymbolCategory(point.symbolCode)
@@ -854,35 +862,41 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const windBaseline = `<line x1="${marginLeft.toFixed(2)}" y1="${windAreaBottom.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="1" stroke-opacity="${(baseGridOpacity * 0.85).toFixed(2)}" />`
 
     const windDirectionArrows: string[] = []
-    const arrowInterval = Math.max(1, Math.round(points.length / 20))
+    const arrowInterval = Math.max(1, Math.round(points.length / 22))
     points.forEach((point, idx) => {
       if (idx % arrowInterval !== 0 && idx !== points.length - 1) return
       if (typeof point.windDirection !== 'number') return
       const x = getX(idx)
-      const rotation = (point.windDirection + 180) % 360
+      const rawRotation = point.windDirection % 360
+      const rotation = rawRotation < 0 ? rawRotation + 360 : rawRotation
       windDirectionArrows.push(`<g class="wind-arrow" transform="translate(${x.toFixed(2)}, ${arrowRowY.toFixed(2)}) rotate(${rotation.toFixed(2)})"><path d="M0,-12 L5,6 L0,2 L-5,6 Z" fill="${config?.secondaryTextColor ?? '#56616c'}" /></g>`)
     })
 
-    const legendSpacing = 174
-    const legendTranslate = (multiplier: number) => (legendSpacing * multiplier).toFixed(2)
+    const legendItems = [
+      `<g>
+          <line x1="-18" y1="0" x2="18" y2="0" stroke="${temperatureColor}" stroke-width="2.4" stroke-linecap="round" />
+          <text class="legend-label" x="0" y="22" text-anchor="middle">Temperature</text>
+        </g>`,
+      `<g>
+          <rect x="-18" y="-10" width="36" height="10" fill="${precipColor}" />
+          <text class="legend-label" x="0" y="22" text-anchor="middle">Precipitation</text>
+        </g>`,
+      `<g>
+          <line x1="-18" y1="0" x2="18" y2="0" stroke="${windColor}" stroke-width="2" stroke-linecap="round" />
+          <text class="legend-label" x="0" y="22" text-anchor="middle">Wind speed</text>
+        </g>`,
+      `<g>
+          <line x1="-18" y1="0" x2="18" y2="0" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" />
+          <text class="legend-label" x="0" y="22" text-anchor="middle">Wind gust</text>
+        </g>`
+    ]
+
+    const legendSpacing = 186
+    const legendWidth = legendItems.length > 1 ? legendSpacing * (legendItems.length - 1) : 0
+    const legendStartX = (width / 2) - (legendWidth / 2)
     const legendGroup = `
-      <g class="legend" transform="translate(${marginLeft.toFixed(2)}, ${legendY.toFixed(2)})">
-        <g>
-          <line x1="0" y1="0" x2="26" y2="0" stroke="${temperatureColor}" stroke-width="2.4" stroke-linecap="round" />
-          <text class="legend-label" x="34" y="4">Temperature</text>
-        </g>
-        <g transform="translate(${legendTranslate(1)}, 0)">
-          <rect x="0" y="-10" width="26" height="10" fill="${precipColor}" />
-          <text class="legend-label" x="34" y="-2">Precipitation</text>
-        </g>
-        <g transform="translate(${legendTranslate(2)}, 0)">
-          <line x1="0" y1="0" x2="26" y2="0" stroke="${windColor}" stroke-width="2" stroke-linecap="round" />
-          <text class="legend-label" x="34" y="4">Wind speed</text>
-        </g>
-        <g transform="translate(${legendTranslate(3)}, 0)">
-          <line x1="0" y1="0" x2="26" y2="0" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" />
-          <text class="legend-label" x="34" y="4">Wind gust</text>
-        </g>
+      <g class="legend" transform="translate(${legendStartX.toFixed(2)}, ${legendY.toFixed(2)})">
+        ${legendItems.map((item, idx) => `<g transform="translate(${(legendSpacing * idx).toFixed(2)}, 0)">${item}</g>`).join('')}
       </g>
     `
 
@@ -893,8 +907,6 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const lonLabel = this.formatCoordinateForLabel(lon)
     const locationTitle = latLabel && lonLabel ? `Weather forecast for ${latLabel}, ${lonLabel}` : 'Weather forecast'
 
-    const precipAxisTitle = `<text class="axis-title" x="${(width - marginRight + 20).toFixed(2)}" y="${(weatherTop + 4).toFixed(2)}" text-anchor="start" dominant-baseline="hanging">mm</text>`
-    const windAxisTitle = `<text class="axis-title" x="${(marginLeft - 16).toFixed(2)}" y="${(windAreaBottom + 20).toFixed(2)}" text-anchor="end" dominant-baseline="middle">m/s</text>`
     const titleElement = `<text class="title-label" x="${(width / 2).toFixed(2)}" y="${titleY.toFixed(2)}" text-anchor="middle">${this.escapeXml(locationTitle)}</text>`
 
     const styleBlock = `
@@ -910,17 +922,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   }
   .hour-label,
   .y-axis-label,
-  .legend-label,
-  .axis-title {
+  .legend-label {
     font-size: 0.8666666667rem;
-    font-weight: 440;
+    font-weight: 500;
     line-height: 1.2rem;
     fill: ${config?.secondaryTextColor ?? '#56616c'};
   }
   .title-label {
-    font-size: 1.0666666667rem;
-    font-weight: 600;
-    line-height: 1.4666666667rem;
+    font-size: 1.4666666667rem;
+    font-weight: 700;
+    line-height: 1.8666666667rem;
     fill: ${config?.mainTextColor ?? '#21292b'};
   }
 </style>
@@ -942,9 +953,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     ${windGustPath}
     ${temperatureLabels.join('')}
     ${precipAxisLabels.join('')}
-    ${precipAxisTitle}
     ${windAxisLabels.join('')}
-    ${windAxisTitle}
     ${hourLabels.join('')}
     ${dayLabels.join('')}
     ${iconElements.join('')}
