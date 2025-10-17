@@ -20,6 +20,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   private lastModifiedHeader: string | null = null
   private lastEtagHeader: string | null = null
   private lastRequestUrl: string | null = null
+  private lastSourceInput: string | null = null
   private userAgentHeaderWarningLogged = false
   private fallbackUserAgent: string | null = null
 
@@ -61,7 +62,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     )
   }
 
-  private getEffectiveSourceUrl = (): string | null => {
+  private getEffectiveSourceInput = (): string | null => {
     const normalized = this.normalizeUrl(this.props.config.sourceUrl)
     if (normalized) return normalized
     const raw = this.props.config.sourceUrl
@@ -69,6 +70,54 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       return raw.trim()
     }
     return null
+  }
+
+  private truncateCoordinate = (value: number): string | null => {
+    if (!Number.isFinite(value)) return null
+    const truncated = Math.round(Math.abs(value) * 10000) / 10000
+    const signed = value < 0 ? -truncated : truncated
+    const fixed = signed.toFixed(4)
+    return fixed.replace(/\.0+$/, '').replace(/(\.\d*?[1-9])0+$/, '$1')
+  }
+
+  private resolveFetchTarget = (normalizedUrl: string): string | null => {
+    try {
+      const parsed = new URL(normalizedUrl)
+      const host = parsed.hostname.toLowerCase()
+      const yrHost = host === 'www.yr.no' || host.endsWith('.yr.no')
+      if (yrHost) {
+        const decodedPath = decodeURIComponent(parsed.pathname)
+        const segments = decodedPath.split('/').filter(Boolean)
+        const contentIndex = segments.findIndex((segment) => segment.toLowerCase() === 'content')
+        if (contentIndex >= 0 && segments.length > contentIndex + 2) {
+          const locationSegment = segments[contentIndex + 1]
+          const resourceSegment = segments[contentIndex + 2]
+          if (/meteogram\.svg$/i.test(resourceSegment)) {
+            const coordParts = locationSegment.split(',')
+            if (coordParts.length >= 2) {
+              const lat = Number.parseFloat(coordParts[0])
+              const lon = Number.parseFloat(coordParts[1])
+              const latString = this.truncateCoordinate(lat)
+              const lonString = this.truncateCoordinate(lon)
+              if (latString && lonString) {
+                const params = new URLSearchParams()
+                parsed.searchParams.forEach((value, key) => {
+                  if (key.toLowerCase() === 'nocache') return
+                  params.set(key, value)
+                })
+                params.set('lat', latString)
+                params.set('lon', lonString)
+                const apiUrl = `https://api.met.no/weatherapi/meteogram/2.0/classic?${params.toString()}`
+                return apiUrl
+              }
+            }
+          }
+        }
+      }
+    } catch (err) {
+      // ignore resolution errors and fall back to the normalized URL
+    }
+    return normalizedUrl
   }
 
   private getEffectiveUserAgent = (): string | null => {
@@ -152,10 +201,11 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
     const effectiveUrl = normalizedUrl ?? (config.sourceUrl?.trim() ? config.sourceUrl.trim() : null)
 
-    if (effectiveUrl !== this.lastRequestUrl) {
+    if (effectiveUrl !== this.lastSourceInput) {
       this.lastModifiedHeader = null
       this.lastEtagHeader = null
-      this.lastRequestUrl = effectiveUrl
+      this.lastRequestUrl = null
+      this.lastSourceInput = effectiveUrl
     }
     const fallbackSvg = this.getFallbackSvg()
     if (effectiveUrl) {
@@ -177,7 +227,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   setupAutoRefresh = (): void => {
     if (this.refreshIntervalId) clearInterval(this.refreshIntervalId)
-    const effectiveUrl = this.getEffectiveSourceUrl()
+    const effectiveUrl = this.getEffectiveSourceInput()
     if (!this.getEffectiveUserAgent()) {
       return
     }
@@ -200,6 +250,14 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       })
       return
     }
+    const fetchTarget = this.resolveFetchTarget(normalizedUrl)
+    if (!fetchTarget) {
+      this.setState({
+        isLoading: false,
+        error: 'Unable to resolve a meteogram endpoint from the provided Source URL.'
+      })
+      return
+    }
     const configuredUserAgent = this.getEffectiveUserAgent()
     if (!configuredUserAgent) {
       this.setState({
@@ -208,16 +266,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       })
       return
     }
-    if (normalizedUrl !== this.lastRequestUrl) {
+    if (fetchTarget !== this.lastRequestUrl) {
       this.lastModifiedHeader = null
       this.lastEtagHeader = null
-      this.lastRequestUrl = normalizedUrl
+      this.lastRequestUrl = fetchTarget
     }
     if (attempt === 1) {
       this.setState({ isLoading: true, error: null })
     }
 
-    this.fetchSvgDirect(normalizedUrl, attempt)
+    this.fetchSvgDirect(fetchTarget, attempt)
   }
 
   fetchSvgDirect = (url: string, attempt = 1): void => {
@@ -406,7 +464,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   private renderContent = (config: IMConfig, expanded: boolean): React.ReactNode => {
     const { isLoading, error, svgHtml } = this.state
-    const effectiveSourceUrl = this.getEffectiveSourceUrl()
+    const effectiveSourceUrl = this.getEffectiveSourceInput()
 
     const popupBorderRadius = Number.isFinite(config.popupBorderRadius) ? config.popupBorderRadius : 0
 
@@ -708,7 +766,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     const { expanded } = this.state
     const scopeClass = `yrw-${id}`
 
-    const effectiveSourceUrl = this.getEffectiveSourceUrl()
+    const effectiveSourceUrl = this.getEffectiveSourceInput()
     const content = this.renderContent(config, false)
 
     const popupContent = this.renderContent(config, true)
