@@ -1,0 +1,10 @@
+﻿node_modules/
+dist/
+build/
+.cache/
+tmp/
+*.log
+.env
+.vscode/
+.DS_Store
+Thumbs.db

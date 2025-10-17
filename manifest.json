@@ -1,0 +1,23 @@
+{
+  "name": "YrWeather",
+  "label": "Yr Weather",
+  "platform": "handler",
+    "type": "widget",
+  "version": "1.0.0",
+  "exbVersion": "1.18.0",
+  "description": "Displays a customizable meteogram chart with specific color settings.",
+  "copyright": "",
+  "license": "http://www.apache.org/licenses/LICENSE-2.0",
+  "properties": {
+    "hasSetting": true,
+    "hasMainStage": false,
+    "inPanel": false
+  },
+  "translatedLocales": [
+    "en"
+  ],
+  "defaultSize": {
+    "width": 782,
+    "height": 391
+  }
+}
