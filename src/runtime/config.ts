@@ -2,6 +2,7 @@ import { type ImmutableObject } from 'jimu-core'
 
 export interface Config {
   sourceUrl: string
+  userAgent?: string
   autoRefreshEnabled: boolean
   refreshInterval: number
   svgCode: string

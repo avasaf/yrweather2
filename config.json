@@ -1,5 +1,6 @@
 {
   "sourceUrl": "https://www.yr.no/en/content/.../meteogram.svg",
+  "userAgent": "YrWeatherExperienceWidget/1.0 (https://your-domain.example contact@example.com)",
   "autoRefreshEnabled": true,
   "refreshInterval": 60,
   "svgCode": "<!-- Fallback SVG code can be pasted here -->",
