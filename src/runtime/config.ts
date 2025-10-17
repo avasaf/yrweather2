@@ -2,6 +2,7 @@ import { type ImmutableObject } from 'jimu-core'
 
 export interface Config {
   sourceUrl: string
+  userAgent?: string
   autoRefreshEnabled: boolean
   refreshInterval: number
   svgCode: string
@@ -9,11 +10,7 @@ export interface Config {
   overallBackground: string
   padding: number
 
-  // Logos / text
-  logoColor: string
-  yrLogoBackgroundColor: string
-  yrLogoTextColor: string
-  yAxisIconColor: string          // used for BOTH Y and X axis icons
+  // Text
   mainTextColor: string
   secondaryTextColor: string
 
@@ -21,6 +18,9 @@ export interface Config {
   gridLineColor: string
   gridLineWidth: number
   gridLineOpacity: number
+  dayBoundaryColor: string
+  dayBoundaryWidth: number
+  dayBoundaryOpacity: number
 
   // Curves / bars
   temperatureLineColor: string
