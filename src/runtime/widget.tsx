@@ -21,6 +21,24 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   private lastEtagHeader: string | null = null
   private lastRequestUrl: string | null = null
   private userAgentHeaderWarningLogged = false
+  private fallbackUserAgent: string | null = null
+
+  private applyConfigUpdate = (updater: (config: IMConfig) => IMConfig, context: string): boolean => {
+    const { onSettingChange, id, config } = this.props
+    if (typeof onSettingChange === 'function') {
+      const nextConfig = updater(config)
+      if (nextConfig !== config) {
+        onSettingChange({
+          id,
+          config: nextConfig
+        })
+      }
+      return true
+    }
+
+    console.warn(`onSettingChange is not available (${context}), skipping config update.`)
+    return false
+  }
 
   private normalizeUrl = (url?: string | null): string | null => {
     if (!url) return null
@@ -41,6 +59,33 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       tryBuild(`http://${trimmed}`) ||
       trimmed
     )
+  }
+
+  private getEffectiveSourceUrl = (): string | null => {
+    const normalized = this.normalizeUrl(this.props.config.sourceUrl)
+    if (normalized) return normalized
+    const raw = this.props.config.sourceUrl
+    if (typeof raw === 'string' && raw.trim()) {
+      return raw.trim()
+    }
+    return null
+  }
+
+  private getEffectiveUserAgent = (): string | null => {
+    const configured = this.props.config.userAgent
+    if (typeof configured === 'string') {
+      const trimmed = configured.trim()
+      if (trimmed) {
+        return trimmed
+      }
+      if (configured.length > 0) {
+        return null
+      }
+    }
+    if (this.fallbackUserAgent) {
+      return this.fallbackUserAgent
+    }
+    return DEFAULT_USER_AGENT
   }
   constructor (props) {
     super(props)
@@ -85,28 +130,36 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   handleDataSourceChange = () => {
     const { config } = this.props
-    if (typeof config.userAgent === 'undefined') {
-      this.props.onSettingChange({
-        id: this.props.id,
-        config: this.props.config.set('userAgent', DEFAULT_USER_AGENT)
-      })
-      return
+    const hasUserAgentConfigured = typeof config.userAgent === 'string'
+
+    if (!hasUserAgentConfigured) {
+      const applied = this.applyConfigUpdate(cfg => cfg.set('userAgent', DEFAULT_USER_AGENT), 'apply default user agent')
+      if (applied) {
+        return
+      }
+      this.fallbackUserAgent = DEFAULT_USER_AGENT
+    } else {
+      this.fallbackUserAgent = null
     }
+
     const normalizedUrl = this.normalizeUrl(config.sourceUrl)
     if (normalizedUrl && normalizedUrl !== config.sourceUrl) {
-      this.props.onSettingChange({
-        id: this.props.id,
-        config: this.props.config.set('sourceUrl', normalizedUrl)
-      })
+      const applied = this.applyConfigUpdate(cfg => cfg.set('sourceUrl', normalizedUrl), 'normalize source URL')
+      if (applied) {
+        return
+      }
     }
-    if (normalizedUrl !== this.lastRequestUrl) {
+
+    const effectiveUrl = normalizedUrl ?? (config.sourceUrl?.trim() ? config.sourceUrl.trim() : null)
+
+    if (effectiveUrl !== this.lastRequestUrl) {
       this.lastModifiedHeader = null
       this.lastEtagHeader = null
-      this.lastRequestUrl = normalizedUrl
+      this.lastRequestUrl = effectiveUrl
     }
     const fallbackSvg = this.getFallbackSvg()
-    if (normalizedUrl) {
-      this.fetchSvgFromUrl(normalizedUrl)
+    if (effectiveUrl) {
+      this.fetchSvgFromUrl(effectiveUrl)
     } else if (fallbackSvg) {
       this.processSvg(fallbackSvg)
     } else {
@@ -124,13 +177,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   setupAutoRefresh = (): void => {
     if (this.refreshIntervalId) clearInterval(this.refreshIntervalId)
-    const normalizedUrl = this.normalizeUrl(this.props.config.sourceUrl)
-    if (!this.props.config.userAgent?.trim()) {
+    const effectiveUrl = this.getEffectiveSourceUrl()
+    if (!this.getEffectiveUserAgent()) {
       return
     }
-    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && normalizedUrl) {
+    if (this.props.config.autoRefreshEnabled && this.props.config.refreshInterval > 0 && effectiveUrl) {
       const ms = this.props.config.refreshInterval * 60 * 1000
-      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(normalizedUrl), ms)
+      this.refreshIntervalId = setInterval(() => this.fetchSvgFromUrl(effectiveUrl), ms)
     }
   }
 
@@ -147,7 +200,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       })
       return
     }
-    const configuredUserAgent = this.props.config.userAgent?.trim()
+    const configuredUserAgent = this.getEffectiveUserAgent()
     if (!configuredUserAgent) {
       this.setState({
         isLoading: false,
@@ -187,7 +240,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     }
 
     const headers = new Headers({ Accept: 'image/svg+xml,text/html;q=0.9,*/*;q=0.8' })
-    const userAgent = this.props.config.userAgent?.trim()
+    const userAgent = this.getEffectiveUserAgent()
     if (userAgent) {
       try {
         headers.set('User-Agent', userAgent)
@@ -245,10 +298,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         this.processSvg(svgString)
 
         if (svgString.startsWith('<svg')) {
-          this.props.onSettingChange({
-            id: this.props.id,
-            config: this.props.config.set('svgCode', svgString)
-          })
+          this.applyConfigUpdate(cfg => cfg.set('svgCode', svgString), 'store fetched SVG')
         }
       })
       .catch(err => {
@@ -356,6 +406,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   private renderContent = (config: IMConfig, expanded: boolean): React.ReactNode => {
     const { isLoading, error, svgHtml } = this.state
+    const effectiveSourceUrl = this.getEffectiveSourceUrl()
 
     const popupBorderRadius = Number.isFinite(config.popupBorderRadius) ? config.popupBorderRadius : 0
 
@@ -398,11 +449,11 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       return wrappedContent(
         <div style={{ padding: '10px', textAlign: 'center', color: 'red' }}>
           {error}
-          {config.sourceUrl && (
+          {effectiveSourceUrl && (
             <div style={{ marginTop: 10, display: 'flex', justifyContent: 'center' }}>
               <button
                 className="action-button refresh-button large"
-                onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+                onClick={() => this.fetchSvgFromUrl(effectiveSourceUrl)}
                 title="Refresh graph"
                 aria-label="Refresh graph"
               >
@@ -652,16 +703,17 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     }
   `
 
-  render(): React.ReactElement {
+  render(): React.ReactElement { 
     const { config, id } = this.props
     const { expanded } = this.state
     const scopeClass = `yrw-${id}`
 
+    const effectiveSourceUrl = this.getEffectiveSourceUrl()
     const content = this.renderContent(config, false)
 
     const popupContent = this.renderContent(config, true)
 
-    const showControls = this.props.config.sourceUrl && !expanded && !this.state.error
+    const showControls = effectiveSourceUrl && !expanded && !this.state.error
 
     return (
       <div className={scopeClass} css={this.getStyle(config)}>
@@ -671,7 +723,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
           <div className="button-container">
             <button
               className="action-button refresh-button"
-              onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+              onClick={() => effectiveSourceUrl && this.fetchSvgFromUrl(effectiveSourceUrl)}
               title="Refresh graph"
               aria-label="Refresh graph"
             >{this.renderRefreshIcon()}</button>
@@ -728,7 +780,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
               <div className="button-container">
                 <button
                   className="action-button refresh-button"
-                  onClick={() => this.fetchSvgFromUrl(config.sourceUrl)}
+                  onClick={() => effectiveSourceUrl && this.fetchSvgFromUrl(effectiveSourceUrl)}
                   title="Refresh graph"
                   aria-label="Refresh graph"
                 >
