@@ -318,17 +318,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
   private fetchFromLocationForecast = (url: string, attempt = 1): void => {
     const hasConditionalHeaders = Boolean(this.lastModifiedHeader || this.lastEtagHeader)
-    let requestUrl = url
-    if (!hasConditionalHeaders) {
-      try {
-        const urlObj = new URL(url)
-        urlObj.searchParams.set('nocache', Date.now().toString())
-        requestUrl = urlObj.toString()
-      } catch (err) {
-        requestUrl = url + (url.includes('?') ? '&' : '?') + 'nocache=' + Date.now()
-      }
-    }
-
+    const requestUrl = url
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null
     let timeoutId: ReturnType<typeof setTimeout> | null = null
     if (controller) {
