@@ -37,6 +37,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
   private lastSourceInput: string | null = null
   private userAgentHeaderWarningLogged = false
   private fallbackUserAgent: string | null = null
+  private lastForecastJson: any = null
 
   private applyConfigUpdate = (updater: (config: IMConfig) => IMConfig, context: string): boolean => {
     const { onSettingChange, id, config } = this.props
@@ -368,7 +369,12 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       this.handleDataSourceChange()
       this.setupAutoRefresh()
     } else if (cfg !== prev) {
-      if (this.state.rawSvg) this.processSvg(this.state.rawSvg)
+      const svgChanged = cfg.get('svgCode') !== prev.get('svgCode')
+      if (this.lastForecastJson && !svgChanged) {
+        this.updateSvgFromLocationForecast(this.lastForecastJson, false)
+      } else if (this.state.rawSvg) {
+        this.processSvg(this.state.rawSvg)
+      }
     }
 
   }
@@ -534,11 +540,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         if (!json) {
           return
         }
-        const svgString = this.buildSvgFromLocationForecast(json)
-        this.processSvg(svgString)
-        if (svgString.startsWith('<svg')) {
-          this.applyConfigUpdate(cfg => cfg.set('svgCode', svgString), 'store fetched SVG from Locationforecast')
-        }
+        this.updateSvgFromLocationForecast(json)
       })
       .catch(err => {
         if (controller) controller.abort()
@@ -569,17 +571,20 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       })
   }
 
-  private computeChartYPosition = (value: number, min: number, range: number, height: number, top: number): number => {
-    if (!Number.isFinite(value)) {
-      return height + top
+  private updateSvgFromLocationForecast = (forecastJson: any, persist = true): void => {
+    this.lastForecastJson = forecastJson
+    const svgString = this.buildSvgFromLocationForecast(forecastJson)
+    this.processSvg(svgString)
+    if (persist && svgString.startsWith('<svg')) {
+      this.applyConfigUpdate(cfg => {
+        const current = cfg.get('svgCode')
+        if (current === svgString) {
+          return cfg
+        }
+        return cfg.set('svgCode', svgString)
+      }, 'store fetched SVG from Locationforecast')
     }
-    if (range === 0) {
-      return top + height / 2
-    }
-    const normalized = (value - min) / range
-    return top + height - (normalized * height)
   }
-
 
   private buildSvgFromLocationForecast = (forecastJson: any): string => {
     const timeseries = forecastJson?.properties?.timeseries
@@ -634,7 +639,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
     if (points.length > 0) {
       const startTime = points[0].date.getTime()
-      const maxDurationMs = 72 * 60 * 60 * 1000
+      const maxDurationMs = 2.5 * 24 * 60 * 60 * 1000
       points = points.filter((p) => (p.date.getTime() - startTime) <= maxDurationMs)
     }
 
@@ -682,27 +687,27 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       precipScaleMax = 1
     }
 
-    const width = 1360
-    const marginLeft = 104
-    const marginRight = 148
+    const width = 1760
+    const marginLeft = 136
+    const marginRight = 136
     const chartWidth = width - marginLeft - marginRight
 
-    const dayLabelY = 48
-    const hourLabelY = dayLabelY + 24
-    const weatherTop = hourLabelY + 46
-    const weatherHeight = 248
+    const dayLabelY = 60
+    const hourLabelY = dayLabelY + 26
+    const weatherTop = hourLabelY + 56
+    const weatherHeight = 276
     const weatherBottom = weatherTop + weatherHeight
-    const precipAreaHeight = Math.min(92, weatherHeight * 0.42)
+    const precipAreaHeight = Math.min(108, weatherHeight * 0.44)
     const precipAreaTop = weatherBottom - precipAreaHeight
-    const windGap = 48
+    const windGap = 60
     const windAreaTop = weatherBottom + windGap
-    const windAreaHeight = 164
+    const windAreaHeight = 186
     const windAreaBottom = windAreaTop + windAreaHeight
-    const iconRowY = weatherTop - 32
-    const arrowRowY = windAreaBottom + 36
-    const legendY = arrowRowY + 38
-    const titleY = legendY + 52
-    const height = titleY + 48
+    const iconRowY = weatherTop - 36
+    const arrowRowY = windAreaBottom + 42
+    const legendY = arrowRowY + 44
+    const titleY = legendY + 64
+    const height = titleY + 64
 
     const step = chartWidth / (points.length - 1)
     const getX = (idx: number) => marginLeft + step * idx
@@ -764,23 +769,27 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
     const windHorizontalLines: string[] = []
     const windAxisLabels: string[] = []
-    const windLabelSteps = 3
-    const windLabelBaseOffset = 18
+    const windLabelSteps = 4
     for (let i = 0; i <= windLabelSteps; i++) {
       const value = (windScaleMax / windLabelSteps) * i
       const y = windY(value)
-      windHorizontalLines.push(`<line x1="${marginLeft.toFixed(2)}" y1="${y.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="${(typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1).toFixed(2)}" stroke-opacity="${(Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1) * 0.9}" />`)
-      const labelY = windAreaBottom - (value / Math.max(windScaleMax, 1)) * (windAreaHeight - windLabelBaseOffset)
+      windHorizontalLines.push(`<line x1="${marginLeft.toFixed(2)}" y1="${y.toFixed(2)}" x2="${(width - marginRight).toFixed(2)}" y2="${y.toFixed(2)}" stroke="${config?.gridLineColor ?? '#c3d0d8'}" stroke-width="${(typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1).toFixed(2)}" stroke-opacity="${(Number.isFinite(config?.gridLineOpacity) ? Math.min(Math.max(config.gridLineOpacity, 0), 1) : 1) * 0.85}" />`)
+      const labelY = windAreaTop + windAreaHeight - (value / Math.max(windScaleMax, 1)) * windAreaHeight
       const windLabel = value.toFixed(value < 10 ? 1 : 0).replace(/\.0$/, '')
-      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(marginLeft - 18).toFixed(2)}" y="${labelY.toFixed(2)}" text-anchor="end" dominant-baseline="middle">${windLabel} m/s</text>`)
+      windAxisLabels.push(`<text class="y-axis-label wind-label" x="${(width - marginRight + 22).toFixed(2)}" y="${labelY.toFixed(2)}" text-anchor="start" dominant-baseline="middle">${windLabel} m/s</text>`)
     }
 
     const verticalLines: string[] = []
     const hourLabels: string[] = []
+    const hourIntervalHours = 2
+    const firstLabelIndex = points.findIndex((point) => point.date.getMinutes() === 0)
+    const firstLabelTime = firstLabelIndex >= 0 ? points[firstLabelIndex].date.getTime() : null
     points.forEach((point, idx) => {
       if (point.date.getMinutes() !== 0) return
-      const hours = point.date.getHours()
-      if (hours % 2 !== 0) return
+      if (firstLabelTime === null) return
+      const diffHours = Math.round((point.date.getTime() - firstLabelTime) / (60 * 60 * 1000))
+      if (diffHours < 0) return
+      if (diffHours % hourIntervalHours !== 0) return
       const x = getX(idx)
       const gridColor = config?.gridLineColor ?? '#c3d0d8'
       const gridWidth = typeof config?.gridLineWidth === 'number' ? config.gridLineWidth : 1
@@ -789,7 +798,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
         `<line x1="${x.toFixed(2)}" y1="${weatherTop.toFixed(2)}" x2="${x.toFixed(2)}" y2="${weatherBottom.toFixed(2)}" stroke="${gridColor}" stroke-width="${(gridWidth * 0.85).toFixed(2)}" stroke-opacity="${(gridOpacity * 0.75).toFixed(2)}" stroke-dasharray="2 6" />`,
         `<line x1="${x.toFixed(2)}" y1="${windAreaTop.toFixed(2)}" x2="${x.toFixed(2)}" y2="${windAreaBottom.toFixed(2)}" stroke="${gridColor}" stroke-width="${(gridWidth * 0.85).toFixed(2)}" stroke-opacity="${(gridOpacity * 0.75).toFixed(2)}" stroke-dasharray="2 6" />`
       ].join(''))
-      hourLabels.push(`<text class="hour-label" x="${x.toFixed(2)}" y="${hourLabelY.toFixed(2)}" text-anchor="middle">${hours.toString()}</text>`)
+      const hourLabel = point.date.getHours().toString().padStart(2, '0')
+      hourLabels.push(`<text class="hour-label" x="${x.toFixed(2)}" y="${hourLabelY.toFixed(2)}" text-anchor="middle">${hourLabel}</text>`)
     })
 
     const temperaturePathPoints: string[] = []
@@ -820,13 +830,13 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       windGustPathPoints.push(`${windGustPathPoints.length === 0 ? 'M' : 'L'}${x.toFixed(2)},${y.toFixed(2)}`)
     })
     const windGustColor = config?.windGustLineColor ?? '#e6d300'
-    const windGustPath = windGustPathPoints.length > 1 ? `<path d="${windGustPathPoints.join(' ')}" fill="none" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linejoin="round" stroke-linecap="round" />` : ''
+    const windGustPath = windGustPathPoints.length > 1 ? `<path d="${windGustPathPoints.join(' ')}" fill="none" stroke="${windGustColor}" stroke-width="2.2" stroke-dasharray="6 6" stroke-linejoin="round" stroke-linecap="round" />` : ''
 
     const precipitationRects: string[] = []
     const precipColor = config?.precipitationBarColor ?? '#006edb'
     points.forEach((point, idx) => {
       const xCenter = getX(idx)
-      const barWidth = Math.min(step * 0.6, 18)
+      const barWidth = Math.min(step * 0.65, 22)
       const baseValue = Math.max(Math.min(point.precipitation ?? 0, precipScaleMax), 0)
       if (baseValue > 0) {
         const baseHeight = (baseValue / precipScaleMax) * precipAreaHeight
@@ -837,8 +847,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 
     const precipAxisLabels: string[] = []
     const precipTicks = 4
-    const precipAxisHeight = weatherHeight - 24
-    const precipAxisTop = weatherTop + 12
+    const precipAxisHeight = weatherHeight - 36
+    const precipAxisTop = weatherTop + 18
     for (let i = 0; i <= precipTicks; i++) {
       const value = (precipScaleMax / precipTicks) * i
       const y = precipAxisTop + precipAxisHeight - (value / Math.max(precipScaleMax, 1)) * precipAxisHeight
@@ -846,7 +856,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       precipAxisLabels.push(`<text class="y-axis-label precipitation-label" x="${(width - marginRight + 22).toFixed(2)}" y="${y.toFixed(2)}" dominant-baseline="middle" text-anchor="start">${precipLabel} mm</text>`)
     }
 
-    const iconInterval = Math.max(1, Math.round(points.length / 20))
+    const iconInterval = Math.max(1, Math.round(points.length / 22))
     const iconElements: string[] = []
     const iconSize = 22
     points.forEach((point, idx) => {
@@ -868,7 +878,8 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
       if (typeof point.windDirection !== 'number') return
       const x = getX(idx)
       const rawRotation = point.windDirection % 360
-      const rotation = rawRotation < 0 ? rawRotation + 360 : rawRotation
+      const normalizedRotation = rawRotation < 0 ? rawRotation + 360 : rawRotation
+      const rotation = (normalizedRotation + 180) % 360
       windDirectionArrows.push(`<g class="wind-arrow" transform="translate(${x.toFixed(2)}, ${arrowRowY.toFixed(2)}) rotate(${rotation.toFixed(2)})"><path d="M0,-12 L5,6 L0,2 L-5,6 Z" fill="${config?.secondaryTextColor ?? '#56616c'}" /></g>`)
     })
 
@@ -886,12 +897,12 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
           <text class="legend-label" x="0" y="22" text-anchor="middle">Wind speed</text>
         </g>`,
       `<g>
-          <line x1="-18" y1="0" x2="18" y2="0" stroke="${windGustColor}" stroke-width="2" stroke-dasharray="4 4" stroke-linecap="round" />
+          <line x1="-18" y1="0" x2="18" y2="0" stroke="${windGustColor}" stroke-width="2.2" stroke-dasharray="6 6" stroke-linecap="round" />
           <text class="legend-label" x="0" y="22" text-anchor="middle">Wind gust</text>
         </g>`
     ]
 
-    const legendSpacing = 186
+    const legendSpacing = 200
     const legendWidth = legendItems.length > 1 ? legendSpacing * (legendItems.length - 1) : 0
     const legendStartX = (width / 2) - (legendWidth / 2)
     const legendGroup = `
@@ -929,16 +940,16 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
     fill: ${config?.secondaryTextColor ?? '#56616c'};
   }
   .title-label {
-    font-size: 1.4666666667rem;
+    font-size: 1.8666666667rem;
     font-weight: 700;
-    line-height: 1.8666666667rem;
+    line-height: 2.2666666667rem;
     fill: ${config?.mainTextColor ?? '#21292b'};
   }
 </style>
 `
 
     return `<?xml version="1.0" encoding="UTF-8"?>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Yr Weather Forecast">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${width} ${height}" width="${width}" height="${height}" role="img" aria-label="Yr Weather Forecast" style="display:block;margin:0 auto;max-width:100%;height:auto;">
   ${styleBlock}
   <rect x="0" y="0" width="${width}" height="${height}" fill="#ffffff" />
   <g>
@@ -964,6 +975,7 @@ export default class Widget extends React.PureComponent<AllWidgetProps<IMConfig>
 </svg>`
   }
   fetchSvgDirect = (url: string, attempt = 1): void => {
+    this.lastForecastJson = null
     const hasConditionalHeaders = Boolean(this.lastModifiedHeader || this.lastEtagHeader)
     let requestUrl = url
     if (!hasConditionalHeaders) {
